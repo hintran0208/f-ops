@@ -1,6 +1,8 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Simple startup script to run the F-Ops backend server with proper Python path
+F-Ops Backend Runner
+
+This script sets up the proper Python path and starts the FastAPI backend.
 """
 import sys
 import os
@@ -15,14 +17,11 @@ backend_dir = os.path.join(project_root, 'backend')
 os.chdir(backend_dir)
 
 if __name__ == "__main__":
-    # Import the app after setting up the path
-    from backend.app.main import app
-    
-    # Run the server
+    # Run the server using module import
     uvicorn.run(
-        app,
+        "app.main:app",
         host="127.0.0.1",
         port=8002,
         reload=True,
-        reload_dirs=[backend_dir]
+        reload_dirs=[project_root]  # Watch project root for mcp_packs changes
     )

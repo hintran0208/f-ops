@@ -8,21 +8,23 @@ logger = logging.getLogger(__name__)
 
 class GitHubPack(MCPPack):
     """GitHub MCP Pack for repository and CI/CD operations"""
-    
+
     def validate_config(self):
         """Validate GitHub configuration"""
         if 'token' not in self.config:
             raise ValueError("GitHub token is required in configuration")
-        
+
         if not self.config['token']:
             raise ValueError("GitHub token cannot be empty")
-    
+
     def initialize(self):
         """Initialize GitHub client"""
         try:
             self.client = Github(self.config['token'])
             # Test connection
             self.user = self.client.get_user()
+            self.audit_logger = self.config.get('audit_logger')
+            self.allowed_repos = self.config.get('allowed_repos', [])
             logger.info(f"GitHub Pack initialized for user: {self.user.login}")
         except Exception as e:
             logger.error(f"Failed to initialize GitHub client: {e}")
@@ -40,7 +42,8 @@ class GitHubPack(MCPPack):
             'create_issue': self.create_issue,
             'get_pull_requests': self.get_pull_requests,
             'merge_pr': self.merge_pr,
-            'create_release': self.create_release
+            'create_release': self.create_release,
+            'attach_artifacts': self.attach_artifacts
         }
         
         if action not in actions:
@@ -60,22 +63,93 @@ class GitHubPack(MCPPack):
             'create_issue',
             'get_pull_requests',
             'merge_pr',
-            'create_release'
+            'create_release',
+            'attach_artifacts'
         ]
     
+    def validate_repo(self, repo_url: str) -> bool:
+        """Check if repo is allow-listed"""
+        if not self.allowed_repos:
+            logger.warning("No allow-listed repos configured - allowing all")
+            return True
+
+        is_allowed = any(allowed in repo_url for allowed in self.allowed_repos)
+        if not is_allowed:
+            logger.error(f"Repository not allow-listed: {repo_url}")
+            raise ValueError(f"Repository not allow-listed: {repo_url}")
+
+        return True
+
     def create_pr(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Create a pull request"""
         try:
-            repo = self.client.get_repo(params['repository'])
-            
+            # Validate repository if repo_url is provided
+            if 'repo_url' in params:
+                self.validate_repo(params['repo_url'])
+
+            # Support both repository name and repo_url
+            repo_name = params.get('repository') or params.get('repo_name')
+            if not repo_name:
+                raise ValueError("Either 'repository' or 'repo_name' parameter is required")
+
+            repo = self.client.get_repo(repo_name)
+
+            # Create branch if branch_name is provided
+            if 'branch_name' in params:
+                try:
+                    base_branch = repo.get_branch(params.get('base_branch', 'main'))
+                    repo.create_git_ref(
+                        ref=f"refs/heads/{params['branch_name']}",
+                        sha=base_branch.commit.sha
+                    )
+                except GithubException:
+                    # Branch might already exist
+                    pass
+
+                # Add files if provided
+                if 'files' in params:
+                    for file_path, content in params['files'].items():
+                        try:
+                            # Try to get existing file
+                            existing_file = repo.get_contents(file_path, ref=params['branch_name'])
+                            repo.update_file(
+                                path=file_path,
+                                message=f"Update {file_path}",
+                                content=content,
+                                sha=existing_file.sha,
+                                branch=params['branch_name']
+                            )
+                        except GithubException:
+                            # Create new file
+                            repo.create_file(
+                                path=file_path,
+                                message=f"Add {file_path}",
+                                content=content,
+                                branch=params['branch_name']
+                            )
+
+            # Create PR
+            head_branch = params.get('branch_name') or params.get('head_branch')
+            if not head_branch:
+                raise ValueError("Either 'branch_name' or 'head_branch' parameter is required")
+
             pr = repo.create_pull(
                 title=params['title'],
                 body=params.get('body', ''),
-                head=params['head_branch'],
+                head=head_branch,
                 base=params.get('base_branch', 'main'),
                 draft=params.get('draft', False)
             )
-            
+
+            # Log to audit
+            if self.audit_logger:
+                self.audit_logger.log_pr_creation(
+                    repo_url=params.get('repo_url', f"https://github.com/{repo_name}"),
+                    pr_url=pr.html_url,
+                    agent="mcp_github",
+                    files=params.get('files', {})
+                )
+
             return {
                 'success': True,
                 'pr_number': pr.number,
@@ -352,4 +426,71 @@ class GitHubPack(MCPPack):
                 'name': self.name,
                 'status': 'unhealthy',
                 'error': str(e)
+            }
+
+    def attach_artifacts(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Attach dry-run/plan artifacts to PR as comment"""
+        try:
+            pr_url = params['pr_url']
+            artifacts = params['artifacts']
+
+            # Parse PR URL to get repo and PR number
+            import re
+            match = re.search(r'github\.com/([^/]+)/([^/]+)/pull/(\d+)', pr_url)
+            if not match:
+                raise ValueError("Invalid GitHub PR URL")
+
+            owner, repo_name, pr_number = match.groups()
+            repo = self.client.get_repo(f"{owner}/{repo_name}")
+            pr = repo.get_pull(int(pr_number))
+
+            # Format artifacts as markdown comment
+            comment_body = "## F-Ops Dry-Run Artifacts\n\n"
+
+            for artifact_type, content in artifacts.items():
+                comment_body += f"### {artifact_type.title()}\n\n"
+                comment_body += "```\n"
+                comment_body += str(content)
+                comment_body += "\n```\n\n"
+
+            comment_body += "---\n*Generated by F-Ops Pipeline Agent*"
+
+            # Add comment to PR
+            pr.create_issue_comment(comment_body)
+            logger.info(f"Artifacts attached to PR: {pr_url}")
+
+            return {
+                'success': True,
+                'message': 'Artifacts attached successfully'
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to attach artifacts to PR: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    def check_repo_access(self, repo_path: str) -> Dict[str, Any]:
+        """Check if we have access to repository"""
+        try:
+            repo = self.client.get_repo(repo_path)
+            permissions = repo.permissions
+
+            return {
+                "access": True,
+                "repo": repo_path,
+                "permissions": {
+                    "admin": permissions.admin,
+                    "push": permissions.push,
+                    "pull": permissions.pull
+                },
+                "private": repo.private
+            }
+
+        except Exception as e:
+            return {
+                "access": False,
+                "repo": repo_path,
+                "reason": str(e)
             }

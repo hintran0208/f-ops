@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException
-from app.mcp_servers.mcp_kb import MCPKnowledgeBase
 from app.core.kb_manager import KnowledgeBaseManager
 from app.core.audit_logger import AuditLogger
 from app.schemas.pipeline import KBConnectRequest, KBConnectResponse, KBSearchRequest, KBSearchResponse
+from mcp_packs.pack_manager import pack_manager
 import logging
 
 router = APIRouter()
@@ -11,7 +11,9 @@ logger = logging.getLogger(__name__)
 # Initialize components
 kb_manager = KnowledgeBaseManager()
 audit_logger = AuditLogger()
-mcp_kb = MCPKnowledgeBase(kb_manager, audit_logger)
+
+# Initialize KB MCP pack
+pack_manager.initialize_kb_pack(kb_manager, audit_logger)
 
 @router.post("/connect", response_model=KBConnectResponse)
 async def connect_knowledge_source(request: KBConnectRequest):
@@ -19,7 +21,7 @@ async def connect_knowledge_source(request: KBConnectRequest):
     try:
         logger.info(f"KB connect requested for: {request.uri}")
 
-        result = await mcp_kb.connect(request.uri)
+        result = await pack_manager.execute_action('kb', 'connect', {'uri': request.uri})
 
         return KBConnectResponse(**result)
 
@@ -33,10 +35,12 @@ async def search_knowledge_base(request: KBSearchRequest):
     try:
         logger.info(f"KB search: '{request.query}' in {request.collections}")
 
-        results = mcp_kb.search(
-            query=request.query,
-            collections=request.collections
-        )
+        search_result = pack_manager.execute_action('kb', 'search', {
+            'query': request.query,
+            'collections': request.collections
+        })
+
+        results = search_result.get('results', [])
 
         return KBSearchResponse(
             query=request.query,
@@ -91,7 +95,12 @@ async def compose_from_kb(template_type: str, context: dict):
     try:
         logger.info(f"KB compose requested: {template_type}")
 
-        composed_content = mcp_kb.compose(template_type, context)
+        compose_result = pack_manager.execute_action('kb', 'compose', {
+            'template_type': template_type,
+            'context': context
+        })
+
+        composed_content = compose_result.get('content', '')
 
         return {
             "template_type": template_type,
