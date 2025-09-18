@@ -1,270 +1,198 @@
-# F-Ops: AI-Powered DevOps Automation Platform
+# F-Ops — Three-Agent DevOps Assistant (Python + Chroma)
 
-F-Ops is an enterprise-grade DevOps AI Agent that combines intelligent automation, knowledge-driven operations, and safe deployment practices. It enables teams to achieve zero-to-deploy for new repositories in under 30 minutes with enterprise-grade safety and governance.
+F-Ops is a local-first DevOps assistant that combines **AI-powered automation** with **proposal-only safety**. Three specialized agents (**Pipeline**, **Infrastructure**, **Monitoring**) generate complete DevOps setups through **reviewable PRs** with **dry-run validation**—never executing directly.
 
-## 🚀 Features
+## 🎯 Core Concept
 
-### Core Capabilities
-- **Zero-to-Deploy Automation**: Onboard new repositories with complete CI/CD, IaC, and monitoring setup
-- **AI-Powered Incident Response**: Automatic root cause analysis and remediation suggestions
-- **Knowledge-Driven Operations**: Semantic search across documentation, runbooks, and best practices
-- **Safe Deployments**: Dry-run by default, policy enforcement, two-key approvals
-- **Multi-Environment Support**: Manage deployments across dev, staging, and production
+**Proposal-Only Architecture**: F-Ops generates CI/CD pipelines, infrastructure configs, and monitoring setups as **Pull/Merge Requests** with attached dry-run artifacts. All changes are reviewable before execution.
 
-### Key Components
-- **CLI**: Command-line interface for all operations
-- **Web UI**: React-based dashboard (Phase 2)
-- **Agent Core**: LangChain/LangGraph orchestration
-- **MCP Packs**: Modular connectors for GitHub, Kubernetes, AWS
-- **Knowledge Base**: Chroma vector database for semantic search
-- **Audit System**: Immutable JSONL audit logs
+### Three-Agent System
+- **Pipeline Agent**: Generates CI/CD workflows (GitHub Actions/GitLab CI) with security scans and SLO gates
+- **Infrastructure Agent**: Creates Terraform modules and Helm charts with `terraform plan` and `helm --dry-run` validation
+- **Monitoring Agent**: Produces Prometheus rules and Grafana dashboards for observability
 
-## 📦 Installation
+### MCP Server Integration
+Custom **MCP (Model Context Protocol) server packs** provide typed interfaces to:
+- **SCM & CI**: GitHub/GitLab for PR creation, Jenkins for pipeline management
+- **Infra & Cluster**: Terraform for IaC planning, Kubernetes/Helm for deployment validation
+- **Observability**: Prometheus rule generation, Grafana dashboard provisioning
+- **Knowledge**: Chroma vector database for RAG-powered template retrieval
+
+## 🚀 Quick Start
 
 ### Prerequisites
 - Python 3.11+
 - Docker and Docker Compose
-- Kubernetes cluster (optional)
 - OpenAI or Anthropic API key
+- GitHub/GitLab token for PR creation
 
-### Quick Start
+### Installation
 
-1. **Clone the repository:**
+1. **Clone and setup:**
 ```bash
 git clone https://github.com/your-org/f-ops.git
 cd f-ops
-```
-
-2. **Set up environment variables:**
-```bash
 cp .env.example .env
-# Edit .env with your API keys and configuration
+# Edit .env with your API keys
 ```
 
-3. **Start the backend with Docker:**
+2. **Start with Docker:**
 ```bash
 docker-compose up -d
 ```
 
-4. **Install the CLI:**
+3. **Install CLI:**
 ```bash
 cd cli
 pip install -e .
-```
-
-5. **Initialize F-Ops:**
-```bash
-fops init
+fops --help
 ```
 
 ## 🎯 Usage
 
-### CLI Commands
+### CLI Commands (Proposal-Only)
 
-#### Onboarding
+#### Onboard New Repository
 ```bash
-# Onboard a new repository
-fops onboard repo https://github.com/user/repo --target k8s --env staging,prod
+# Generate complete DevOps setup as PRs
+fops onboard --repo https://github.com/user/repo \
+             --target k8s \
+             --env staging,prod
 
-# Check onboarding status
-fops onboard status https://github.com/user/repo
-
-# List onboarded repositories
-fops onboard list
+# Output: 3 PRs opened with CI/CD + IaC + Monitoring + dry-run artifacts
 ```
 
-#### Deployments
+#### Knowledge Base Operations
 ```bash
-# Deploy a service
-fops deploy service my-app --env staging --version v1.2.3
+# Ingest documentation for RAG templates
+fops kb connect --uri https://docs.company.com/devops-guides
 
-# Check deployment status
-fops deploy status my-app --env staging
-
-# Rollback a deployment
-fops deploy rollback my-app --env staging
-
-# View deployment history
-fops deploy history my-app --limit 10
-```
-
-#### Knowledge Base
-```bash
-# Connect a knowledge source
-fops kb connect https://github.com/user/docs --sync
-
-# Search the knowledge base
+# Search for relevant patterns
 fops kb search "kubernetes deployment best practices"
-
-# List connected sources
-fops kb list
-
-# Sync knowledge sources
-fops kb sync
 ```
 
-#### Incident Management
-```bash
-# Create an incident
-fops incident create api-gateway --severity high --title "High latency observed"
+### Web UI Modules
 
-# Investigate an incident
-fops incident investigate INC-2024-0142
+Access at `http://localhost:3000` (after Week 2):
 
-# Get incident playbook
-fops incident playbook high-latency
-
-# Resolve an incident
-fops incident resolve INC-2024-0142 --action 1
-```
-
-### API Endpoints
-
-The FastAPI backend provides RESTful endpoints:
-
-- `GET /` - Root endpoint
-- `GET /health` - Health check
-- `POST /api/onboard/repo` - Onboard repository
-- `POST /api/deploy/service` - Deploy service
-- `POST /api/kb/search` - Search knowledge base
-- `POST /api/incident/create` - Create incident
-
-Full API documentation available at `http://localhost:8000/docs`
+- **Pipeline Agent Module**: Form-driven CI/CD generation with preview
+- **Infrastructure Agent Module**: IaC template generation with plan validation
+- **Monitoring Agent Module**: Observability config generation
+- **KB Connect Module**: Documentation ingestion and search
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         User Interfaces                       │
+│                    Interfaces                               │
 ├──────────────┬──────────────┬──────────────┬────────────────┤
-│     CLI      │   Web UI     │  Slack/Teams │  VS Code/MCP   │
+│     CLI      │   Web UI     │    API       │   MCP Servers  │
+│  (Typer)     │  (React)     │  (FastAPI)   │   (Local)      │
 └──────────────┴──────────────┴──────────────┴────────────────┘
                                │
 ┌─────────────────────────────────────────────────────────────┐
-│                      Agent Core (FastAPI)                     │
-├───────────────────────────────────────────────────────────────┤
-│  • LangGraph/LangChain Orchestration                         │
-│  • Prompt Engineering Engine                                 │
-│  • Policy Enforcement (OPA)                                  │
-└───────────────────────────────────────────────────────────────┘
-                               │
-┌─────────────────────────────────────────────────────────────┐
-│                         MCP Packs                             │
+│                  Three-Agent Core                           │
 ├──────────────┬──────────────┬──────────────┬────────────────┤
-│   GitHub     │  Kubernetes  │     AWS      │  Observability │
+│   Pipeline   │Infrastructure│  Monitoring  │   Knowledge    │
+│    Agent     │    Agent     │    Agent     │      Base      │
+│ (LangGraph)  │ (LangGraph)  │ (LangGraph)  │   (Chroma)     │
 └──────────────┴──────────────┴──────────────┴────────────────┘
                                │
 ┌─────────────────────────────────────────────────────────────┐
-│                      Data & Storage Layer                     │
+│                     MCP Server Packs                       │
 ├──────────────┬──────────────┬──────────────┬────────────────┤
-│   Chroma     │   SQLite     │    JSONL     │   File System  │
+│     SCM      │     Infra    │      Obs     │       KB       │
+│  GitHub/GL   │   TF/K8s/Helm│   Prom/Graf  │    Search      │
+└──────────────┴──────────────┴──────────────┴────────────────┘
+                               │
+┌─────────────────────────────────────────────────────────────┐
+│                   Storage & State                          │
+├──────────────┬──────────────┬──────────────┬────────────────┤
+│    Chroma    │    SQLite    │     JSONL    │   File System  │
 │  (Vectors)   │   (State)    │   (Audit)    │   (Configs)    │
 └──────────────┴──────────────┴──────────────┴────────────────┘
 ```
 
-## 🔧 Configuration
+## 📅 Development Timeline (4 Weeks)
 
-### Environment Variables
-Key environment variables in `.env`:
-- `OPENAI_API_KEY` - OpenAI API key for LLM operations
-- `GITHUB_TOKEN` - GitHub personal access token
-- `KUBECONFIG_PATH` - Path to Kubernetes config
-- `CHROMA_PERSIST_DIR` - Directory for vector database
+### Week 1: Core Agents & CLI ⚡
+- **Pipeline Agent**: GitHub Actions/GitLab CI generation with security scans
+- **Knowledge Base**: Chroma setup with embedding pipeline for documentation
+- **CLI Foundation**: `fops onboard` and `fops kb` commands
+- **MCP Integration**: Basic GitHub/GitLab MCP servers for PR creation
 
-### MCP Pack Configuration
-Each MCP pack can be configured independently:
-```python
-# GitHub Pack
-github_config = {
-    "token": "ghp_xxxxx"
-}
+### Week 2: Infrastructure Agent & Web UI 🏗️
+- **Infrastructure Agent**: Terraform plan and Helm dry-run generation
+- **Web UI Foundation**: React frontend with Pipeline and Infrastructure modules
+- **PR Orchestration**: Automated PR creation with plan artifacts attached
+- **Validation Pipeline**: Syntax validation and dry-run execution
 
-# Kubernetes Pack
-k8s_config = {
-    "kubeconfig": "~/.kube/config",
-    "in_cluster": False
-}
-```
+### Week 3: Monitoring Agent & Advanced KB 📊
+- **Monitoring Agent**: Prometheus rules and Grafana dashboard generation
+- **Advanced RAG**: Enhanced knowledge retrieval with relevance scoring
+- **KB Connect Module**: Web UI for documentation ingestion
+- **Observability MCP**: Prometheus/Grafana validation servers
 
-## 🧪 Testing
+### Week 4: Enterprise Readiness 🛡️
+- **OPA Guardrails**: Policy enforcement and security compliance
+- **Multi-Tenant**: Isolated Chroma collections per organization
+- **Evaluation Harness**: Quality metrics and success rate monitoring
+- **Performance**: <30min onboarding target optimization
 
-Run the test suite:
-```bash
-# Run unit tests
-pytest tests/
+## 🎯 Success Metrics
 
-# Run end-to-end tests
-python tests/test_e2e.py
+- **Onboarding Speed**: New repo → Complete PR set in **≤30 minutes**
+- **Review Quality**: **100%** of outputs delivered as reviewable PRs with dry-run artifacts
+- **Knowledge Utility**: **≥80%** of generated configs include KB citations
+- **Adoption Rate**: **≥50%** usage via Web UI after Week 3
+- **Safety**: **Zero** direct execution—all changes through PR review
 
-# Run with coverage
-pytest --cov=backend tests/
-```
+## 🛡️ Safety & Security
 
-## 📊 Monitoring
+### Proposal-Only Design
+- **No Direct Execution**: All operations generate PR/MR proposals only
+- **Dry-Run Validation**: Every generated config includes validation artifacts
+- **Review Gates**: Human approval required before any infrastructure changes
+- **Audit Trail**: Immutable JSONL logs for all operations
 
-F-Ops includes Prometheus and Grafana for monitoring:
-- Prometheus: `http://localhost:9090`
-- Grafana: `http://localhost:3000` (admin/admin)
+### Enterprise Features
+- **OPA Policies**: Configurable guardrails for compliance requirements
+- **Token Scoping**: Minimal required permissions per MCP server
+- **Multi-Tenant**: Isolated knowledge bases per organization
+- **RBAC Integration**: Role-based access control for sensitive operations
 
-## 🛡️ Security
+## 📦 Core Technologies
 
-- **Authentication**: JWT-based authentication
-- **Authorization**: Role-based access control (RBAC)
-- **Audit Logging**: Immutable JSONL audit trail
-- **Policy Enforcement**: OPA integration for guardrails
-- **Secret Management**: Environment variables and K8s secrets
-
-## 📚 Documentation
-
-- [Installation Guide](docs/installation.md)
-- [CLI Reference](docs/cli-reference.md)
-- [API Documentation](http://localhost:8000/docs)
-- [Architecture Overview](docs/architecture.md)
-- [Contributing Guide](CONTRIBUTING.md)
+- **Backend**: FastAPI with LangGraph agent orchestration
+- **Frontend**: React with Tailwind CSS and TypeScript
+- **Vector DB**: Chroma for semantic search and RAG
+- **State**: SQLite for minimal metadata, JSONL for audit
+- **MCP**: Custom Model Context Protocol servers for tool integration
+- **Validation**: OPA for policy enforcement, native tools for syntax checking
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+Key areas:
+- **MCP Server Development**: Add new tool integrations
+- **Agent Enhancement**: Improve generation quality and citation accuracy
+- **Template Library**: Contribute high-quality DevOps templates
+- **Policy Packs**: Create OPA policies for different compliance frameworks
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🎯 Roadmap
-
-### Phase 1 (Current) ✅
-- Core FastAPI backend
-- CLI with essential commands
-- Chroma knowledge base
-- Basic MCP packs
-
-### Phase 2 (Next)
-- React Web UI
-- Advanced deployment workflows
-- Real-time monitoring
-- Enhanced security features
-
-### Phase 3 (Future)
-- Slack/Teams integration
-- VS Code extension
-- Claude Code MCP
-- Multi-tenancy support
-
-## 💬 Support
-
-- GitHub Issues: [Report bugs or request features](https://github.com/your-org/f-ops/issues)
-- Documentation: [Read the docs](https://docs.f-ops.io)
-- Community: [Join our Discord](https://discord.gg/f-ops)
+MIT License - see [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgments
 
 Built with:
-- [FastAPI](https://fastapi.tiangolo.com/)
-- [LangChain](https://langchain.com/)
-- [Chroma](https://www.trychroma.com/)
-- [Typer](https://typer.tiangolo.com/)
-- [Kubernetes Python Client](https://github.com/kubernetes-client/python)
+- [FastAPI](https://fastapi.tiangolo.com/) for the agent core
+- [LangGraph](https://langchain.com/langgraph) for agent orchestration
+- [Chroma](https://www.trychroma.com/) for vector storage and RAG
+- [React](https://react.dev/) for the Web UI
+- [Typer](https://typer.tiangolo.com/) for CLI development
 
 ---
 
-**F-Ops**: Transform DevOps with AI-powered automation 🚀
+**F-Ops**: Safe, fast, reviewable DevOps automation through AI-powered proposal generation 🚀

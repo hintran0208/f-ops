@@ -1,35 +1,518 @@
-# Phase 2: Web UI & Deployment Implementation
+# Week 2: Infrastructure Agent & Web UI
 
 ## Duration: Week 2 (5 days)
 
 ## Objectives
-- Build Web UI MVP with React and Tailwind CSS
-- Implement onboarding wizard with live preview
-- Create deployment workflows with approval system
-- Integrate CI/CD pipeline generation
-- Establish OPA policy enforcement
+- Build **Infrastructure Agent** for Terraform modules and Helm charts
+- Implement `terraform plan` and `helm --dry-run` validation
+- Create Web UI modules for Pipeline and Infrastructure agents
+- Implement PR/MR creation with attached dry-run artifacts
+- Build `mcp-terraform` and `mcp-helm` servers
 
-## Prerequisites from Phase 1
-- ✅ FastAPI backend operational
-- ✅ Chroma knowledge base configured
-- ✅ Basic CLI commands working
-- ✅ MCP packs foundation ready
-- ✅ Authentication system in place
+## Prerequisites
+- Week 1 completed (Core Foundation & Pipeline Agent)
+- FastAPI backend running with Pipeline Agent
+- Chroma database with KB collections operational
+- MCP servers (`mcp-kb`, `mcp-github`, `mcp-gitlab`) functional
+- JSONL audit logging active
 
-## Day-by-Day Breakdown
+## Day-by-Day Implementation
 
-### Day 6: React Frontend Setup & Authentication
+### Day 6: Infrastructure Agent Core
 
 #### Morning (4 hours)
-1. **React Project Initialization**
+1. **Infrastructure Agent Implementation**
+   ```python
+   # backend/app/agents/infrastructure_agent.py
+   from typing import Dict, Any, List, Optional
+   import subprocess
+   import tempfile
+   import yaml
+   import json
+   from app.core.kb_manager import KnowledgeBaseManager
+   from app.core.citation_engine import CitationEngine
+
+   class InfrastructureAgent:
+       def __init__(self, kb_manager: KnowledgeBaseManager):
+           self.kb = kb_manager
+           self.citation_engine = CitationEngine(kb_manager)
+
+       def generate_infrastructure(self,
+                                  target: str,
+                                  environments: List[str],
+                                  domain: str,
+                                  registry: str,
+                                  secrets_strategy: str) -> Dict[str, Any]:
+           """Generate Terraform and Helm configs with validation"""
+
+           # 1. Search KB for similar infrastructure patterns
+           similar_infra = self.kb.search(
+               collection='iac',
+               query=f"{target} infrastructure terraform helm",
+               k=5
+           )
+
+           # 2. Generate Terraform modules
+           terraform_config = self._generate_terraform(
+               target, environments, domain, registry
+           )
+
+           # 3. Generate Helm charts (if k8s)
+           helm_chart = None
+           if target == "k8s":
+               helm_chart = self._generate_helm_chart(
+                   environments, domain, registry
+               )
+
+           # 4. Run terraform plan (dry-run)
+           terraform_plan = self._run_terraform_plan(terraform_config)
+
+           # 5. Run helm --dry-run (if k8s)
+           helm_dry_run = None
+           if helm_chart:
+               helm_dry_run = self._run_helm_dry_run(helm_chart)
+
+           # 6. Add citations
+           result_with_citations = self.citation_engine.generate_citations(
+               json.dumps({
+                   "terraform": terraform_config,
+                   "helm": helm_chart
+               }),
+               similar_infra
+           )
+
+           return {
+               "terraform": terraform_config,
+               "helm": helm_chart,
+               "terraform_plan": terraform_plan,
+               "helm_dry_run": helm_dry_run,
+               "citations": [s['citation'] for s in similar_infra]
+           }
+
+       def _generate_terraform(self, target: str, envs: List[str],
+                              domain: str, registry: str) -> Dict[str, str]:
+           """Generate Terraform modules"""
+           files = {}
+
+           # Main configuration
+           files['main.tf'] = f"""
+           terraform {{
+               required_version = ">= 1.0"
+               required_providers {{
+                   aws = {{
+                       source  = "hashicorp/aws"
+                       version = "~> 5.0"
+                   }}
+               }}
+           }}
+
+           provider "aws" {{
+               region = var.aws_region
+           }}
+           """
+
+           # Network module
+           files['modules/network/main.tf'] = self._generate_network_module()
+
+           # Registry module
+           files['modules/registry/main.tf'] = self._generate_registry_module(registry)
+
+           # DNS module
+           files['modules/dns/main.tf'] = self._generate_dns_module(domain)
+
+           # Secrets module
+           files['modules/secrets/main.tf'] = self._generate_secrets_module()
+
+           # Environment-specific configs
+           for env in envs:
+               files[f'environments/{env}/terraform.tfvars'] = self._generate_env_vars(env)
+
+           return files
+
+       def _run_terraform_plan(self, config: Dict[str, str]) -> Dict[str, Any]:
+           """Execute terraform plan and capture output"""
+           with tempfile.TemporaryDirectory() as tmpdir:
+               # Write terraform files
+               for path, content in config.items():
+                   file_path = f"{tmpdir}/{path}"
+                   # Create directories
+                   os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                   with open(file_path, 'w') as f:
+                       f.write(content)
+
+               # Run terraform init
+               init_result = subprocess.run(
+                   ['terraform', 'init'],
+                   cwd=tmpdir,
+                   capture_output=True,
+                   text=True
+               )
+
+               # Run terraform plan
+               plan_result = subprocess.run(
+                   ['terraform', 'plan', '-json'],
+                   cwd=tmpdir,
+                   capture_output=True,
+                   text=True
+               )
+
+               return {
+                   "status": "success" if plan_result.returncode == 0 else "failed",
+                   "output": plan_result.stdout,
+                   "errors": plan_result.stderr,
+                   "summary": self._parse_terraform_plan(plan_result.stdout)
+               }
+   ```
+
+2. **Helm Chart Generation**
+   ```python
+   # backend/app/agents/infrastructure_agent.py (continued)
+   def _generate_helm_chart(self, environments: List[str],
+                            domain: str, registry: str) -> Dict[str, str]:
+       """Generate Helm chart skeleton"""
+       files = {}
+
+       # Chart.yaml
+       files['Chart.yaml'] = """
+       apiVersion: v2
+       name: f-ops-app
+       description: A Helm chart for F-Ops application
+       type: application
+       version: 0.1.0
+       appVersion: "1.0"
+       """
+
+       # values.yaml
+       files['values.yaml'] = f"""
+       replicaCount: 2
+
+       image:
+         repository: {registry}/f-ops-app
+         pullPolicy: IfNotPresent
+         tag: ""
+
+       service:
+         type: ClusterIP
+         port: 80
+
+       ingress:
+         enabled: true
+         className: nginx
+         annotations: {{}}
+         hosts:
+           - host: {domain}
+             paths:
+               - path: /
+                 pathType: Prefix
+
+       resources:
+         limits:
+           cpu: 500m
+           memory: 512Mi
+         requests:
+           cpu: 250m
+           memory: 256Mi
+
+       autoscaling:
+         enabled: true
+         minReplicas: 2
+         maxReplicas: 10
+         targetCPUUtilizationPercentage: 80
+       """
+
+       # Deployment template
+       files['templates/deployment.yaml'] = self._generate_deployment_template()
+
+       # Service template
+       files['templates/service.yaml'] = self._generate_service_template()
+
+       # Ingress template
+       files['templates/ingress.yaml'] = self._generate_ingress_template()
+
+       # Environment-specific values
+       for env in environments:
+           files[f'values-{env}.yaml'] = self._generate_env_values(env)
+
+       return files
+
+   def _run_helm_dry_run(self, chart: Dict[str, str]) -> Dict[str, Any]:
+       """Execute helm --dry-run and capture output"""
+       with tempfile.TemporaryDirectory() as tmpdir:
+           chart_dir = f"{tmpdir}/chart"
+           os.makedirs(chart_dir)
+
+           # Write helm files
+           for path, content in chart.items():
+               file_path = f"{chart_dir}/{path}"
+               os.makedirs(os.path.dirname(file_path), exist_ok=True)
+               with open(file_path, 'w') as f:
+                   f.write(content)
+
+           # Run helm lint
+           lint_result = subprocess.run(
+               ['helm', 'lint', chart_dir],
+               capture_output=True,
+               text=True
+           )
+
+           # Run helm install --dry-run
+           dry_run_result = subprocess.run(
+               ['helm', 'install', 'test-release', chart_dir, '--dry-run', '--debug'],
+               capture_output=True,
+               text=True
+           )
+
+           return {
+               "status": "success" if dry_run_result.returncode == 0 else "failed",
+               "lint_output": lint_result.stdout,
+               "dry_run_output": dry_run_result.stdout,
+               "errors": dry_run_result.stderr,
+               "manifests": self._extract_manifests(dry_run_result.stdout)
+           }
+   ```
+
+#### Afternoon (4 hours)
+1. **MCP Terraform Server**
+   ```python
+   # backend/app/mcp_servers/mcp_terraform.py
+   from typing import Dict, Any, List
+   import subprocess
+   import tempfile
+   import os
+   import json
+
+   class MCPTerraform:
+       def __init__(self, allowed_workspaces: List[str]):
+           self.allowed_workspaces = allowed_workspaces
+
+       def plan(self, params: Dict[str, Any]) -> Dict[str, Any]:
+           """Run terraform plan with typed interface"""
+           self.validate_workspace(params['workspace'])
+
+           config = params['config']
+           variables = params.get('variables', {})
+
+           with tempfile.TemporaryDirectory() as tmpdir:
+               # Write configuration
+               for path, content in config.items():
+                   file_path = os.path.join(tmpdir, path)
+                   os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                   with open(file_path, 'w') as f:
+                       f.write(content)
+
+               # Write variables
+               if variables:
+                   with open(os.path.join(tmpdir, 'terraform.tfvars.json'), 'w') as f:
+                       json.dump(variables, f)
+
+               # Initialize terraform
+               init_result = subprocess.run(
+                   ['terraform', 'init', '-backend=false'],
+                   cwd=tmpdir,
+                   capture_output=True,
+                   text=True,
+                   timeout=60
+               )
+
+               if init_result.returncode != 0:
+                   return {
+                       "status": "failed",
+                       "stage": "init",
+                       "error": init_result.stderr
+                   }
+
+               # Run plan
+               plan_result = subprocess.run(
+                   ['terraform', 'plan', '-out=tfplan', '-json'],
+                   cwd=tmpdir,
+                   capture_output=True,
+                   text=True,
+                   timeout=120
+               )
+
+               # Parse JSON output
+               plan_json = self._parse_json_output(plan_result.stdout)
+
+               return {
+                   "status": "success" if plan_result.returncode == 0 else "failed",
+                   "plan": plan_json,
+                   "summary": self._generate_plan_summary(plan_json),
+                   "raw_output": plan_result.stdout,
+                   "errors": plan_result.stderr
+               }
+
+       def validate_workspace(self, workspace: str):
+           """Validate workspace is allowed"""
+           if workspace not in self.allowed_workspaces:
+               raise ValueError(f"Workspace not allowed: {workspace}")
+
+       def _parse_json_output(self, output: str) -> List[Dict]:
+           """Parse terraform JSON output"""
+           plans = []
+           for line in output.split('\n'):
+               if line.strip():
+                   try:
+                       plans.append(json.loads(line))
+                   except json.JSONDecodeError:
+                       continue
+           return plans
+
+       def _generate_plan_summary(self, plan_json: List[Dict]) -> Dict:
+           """Generate human-readable plan summary"""
+           summary = {
+               "add": 0,
+               "change": 0,
+               "destroy": 0,
+               "resources": []
+           }
+
+           for item in plan_json:
+               if item.get('@level') == 'info' and 'change' in item:
+                   change = item['change']
+                   action = change.get('action')
+                   if action == 'create':
+                       summary['add'] += 1
+                   elif action == 'update':
+                       summary['change'] += 1
+                   elif action == 'delete':
+                       summary['destroy'] += 1
+
+                   summary['resources'].append({
+                       'type': change.get('resource', {}).get('type'),
+                       'name': change.get('resource', {}).get('name'),
+                       'action': action
+                   })
+
+           return summary
+   ```
+
+2. **MCP Helm Server**
+   ```python
+   # backend/app/mcp_servers/mcp_helm.py
+   from typing import Dict, Any, List
+   import subprocess
+   import tempfile
+   import yaml
+   import os
+
+   class MCPHelm:
+       def __init__(self, allowed_namespaces: List[str]):
+           self.allowed_namespaces = allowed_namespaces
+
+       def dry_run(self, params: Dict[str, Any]) -> Dict[str, Any]:
+           """Run helm install --dry-run"""
+           self.validate_namespace(params.get('namespace', 'default'))
+
+           chart = params['chart']
+           release_name = params['release_name']
+           values = params.get('values', {})
+
+           with tempfile.TemporaryDirectory() as tmpdir:
+               chart_dir = os.path.join(tmpdir, 'chart')
+               os.makedirs(chart_dir)
+
+               # Write chart files
+               for path, content in chart.items():
+                   file_path = os.path.join(chart_dir, path)
+                   os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                   with open(file_path, 'w') as f:
+                       f.write(content)
+
+               # Write custom values if provided
+               values_file = None
+               if values:
+                   values_file = os.path.join(tmpdir, 'custom-values.yaml')
+                   with open(values_file, 'w') as f:
+                       yaml.dump(values, f)
+
+               # Run helm lint first
+               lint_result = subprocess.run(
+                   ['helm', 'lint', chart_dir],
+                   capture_output=True,
+                   text=True
+               )
+
+               # Prepare dry-run command
+               cmd = [
+                   'helm', 'install', release_name, chart_dir,
+                   '--dry-run', '--debug'
+               ]
+
+               if values_file:
+                   cmd.extend(['-f', values_file])
+
+               if params.get('namespace'):
+                   cmd.extend(['--namespace', params['namespace']])
+
+               # Run dry-run
+               dry_run_result = subprocess.run(
+                   cmd,
+                   capture_output=True,
+                   text=True,
+                   timeout=60
+               )
+
+               return {
+                   "status": "success" if dry_run_result.returncode == 0 else "failed",
+                   "lint": {
+                       "passed": lint_result.returncode == 0,
+                       "output": lint_result.stdout,
+                       "errors": lint_result.stderr
+                   },
+                   "manifests": self._extract_manifests(dry_run_result.stdout),
+                   "notes": self._extract_notes(dry_run_result.stdout),
+                   "raw_output": dry_run_result.stdout,
+                   "errors": dry_run_result.stderr
+               }
+
+       def validate_namespace(self, namespace: str):
+           """Validate namespace is allowed"""
+           if namespace not in self.allowed_namespaces:
+               raise ValueError(f"Namespace not allowed: {namespace}")
+
+       def _extract_manifests(self, output: str) -> List[Dict]:
+           """Extract Kubernetes manifests from dry-run output"""
+           manifests = []
+           current_manifest = []
+           in_manifest = False
+
+           for line in output.split('\n'):
+               if line.startswith('---'):
+                   if current_manifest:
+                       manifest_text = '\n'.join(current_manifest)
+                       try:
+                           manifests.append(yaml.safe_load(manifest_text))
+                       except yaml.YAMLError:
+                           pass
+                       current_manifest = []
+                   in_manifest = True
+               elif in_manifest and line.strip():
+                   current_manifest.append(line)
+
+           # Process last manifest
+           if current_manifest:
+               manifest_text = '\n'.join(current_manifest)
+               try:
+                   manifests.append(yaml.safe_load(manifest_text))
+               except yaml.YAMLError:
+                   pass
+
+           return manifests
+   ```
+
+### Day 7: Web UI Setup & Pipeline Module
+
+#### Morning (4 hours)
+1. **React Project Setup**
    ```bash
-   # frontend/
+   # Create frontend directory
+   cd frontend
    npm create vite@latest f-ops-ui -- --template react-ts
    cd f-ops-ui
    npm install
    ```
 
-2. **Dependencies Installation**
+2. **Core Dependencies**
    ```json
    {
      "dependencies": {
@@ -41,1191 +524,201 @@
        "axios": "^1.6.0",
        "@tanstack/react-query": "^5.0.0",
        "react-hook-form": "^7.48.0",
-       "zod": "^3.22.0",
+       "tailwindcss": "^3.3.0",
        "@headlessui/react": "^1.7.0",
        "@heroicons/react": "^2.0.0",
-       "react-markdown": "^9.0.0",
        "react-syntax-highlighter": "^15.5.0",
-       "recharts": "^2.10.0",
-       "date-fns": "^3.0.0",
-       "clsx": "^2.0.0"
-     },
-     "devDependencies": {
-       "@types/react": "^18.2.0",
-       "@types/react-dom": "^18.2.0",
-       "@vitejs/plugin-react": "^4.2.0",
-       "tailwindcss": "^3.3.0",
-       "autoprefixer": "^10.4.0",
-       "postcss": "^8.4.0",
-       "typescript": "^5.3.0",
-       "vite": "^5.0.0",
-       "eslint": "^8.55.0",
-       "prettier": "^3.1.0"
+       "react-diff-viewer": "^3.1.1"
      }
    }
    ```
 
-3. **Tailwind CSS Configuration**
-   ```javascript
-   // tailwind.config.js
-   export default {
-     content: [
-       "./index.html",
-       "./src/**/*.{js,ts,jsx,tsx}",
-     ],
-     theme: {
-       extend: {
-         colors: {
-           primary: {
-             50: '#eff6ff',
-             500: '#3b82f6',
-             600: '#2563eb',
-             700: '#1d4ed8',
-             900: '#1e3a8a',
-           }
-         },
-         animation: {
-           'spin-slow': 'spin 3s linear infinite',
-           'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-         }
-       },
-     },
-     plugins: [
-       require('@tailwindcss/forms'),
-       require('@tailwindcss/typography'),
-     ],
-   }
-   ```
-
-4. **Project Structure**
-   ```
-   frontend/
-   ├── src/
-   │   ├── components/
-   │   │   ├── common/
-   │   │   │   ├── Button.tsx
-   │   │   │   ├── Card.tsx
-   │   │   │   └── Modal.tsx
-   │   │   ├── onboarding/
-   │   │   │   ├── OnboardingWizard.tsx
-   │   │   │   ├── RepositoryForm.tsx
-   │   │   │   └── PreviewDiff.tsx
-   │   │   ├── deployments/
-   │   │   │   ├── DeploymentList.tsx
-   │   │   │   ├── DeploymentDetails.tsx
-   │   │   │   └── LiveLogs.tsx
-   │   │   ├── incidents/
-   │   │   │   ├── IncidentDashboard.tsx
-   │   │   │   └── RCAView.tsx
-   │   │   └── knowledge/
-   │   │       ├── KnowledgeSearch.tsx
-   │   │       └── SourceConnector.tsx
-   │   ├── pages/
-   │   │   ├── Dashboard.tsx
-   │   │   ├── Onboarding.tsx
-   │   │   ├── Deployments.tsx
-   │   │   ├── Incidents.tsx
-   │   │   └── KnowledgeBase.tsx
-   │   ├── services/
-   │   │   ├── api.ts
-   │   │   ├── auth.ts
-   │   │   └── websocket.ts
-   │   ├── store/
-   │   │   ├── index.ts
-   │   │   ├── authSlice.ts
-   │   │   └── deploymentSlice.ts
-   │   ├── hooks/
-   │   │   ├── useAuth.ts
-   │   │   └── useWebSocket.ts
-   │   ├── utils/
-   │   ├── types/
-   │   ├── App.tsx
-   │   └── main.tsx
-   └── public/
-   ```
-
-#### Afternoon (4 hours)
-1. **Authentication Implementation**
-   ```typescript
-   // src/services/auth.ts
-   import axios from 'axios';
-   
-   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-   
-   export interface LoginCredentials {
-     username: string;
-     password: string;
-   }
-   
-   export interface User {
-     id: string;
-     username: string;
-     email: string;
-     role: string;
-   }
-   
-   class AuthService {
-     async login(credentials: LoginCredentials): Promise<{ token: string; user: User }> {
-       const response = await axios.post(`${API_URL}/api/auth/login`, credentials);
-       if (response.data.token) {
-         localStorage.setItem('token', response.data.token);
-         localStorage.setItem('user', JSON.stringify(response.data.user));
-       }
-       return response.data;
-     }
-   
-     logout(): void {
-       localStorage.removeItem('token');
-       localStorage.removeItem('user');
-     }
-   
-     getCurrentUser(): User | null {
-       const userStr = localStorage.getItem('user');
-       return userStr ? JSON.parse(userStr) : null;
-     }
-   
-     getToken(): string | null {
-       return localStorage.getItem('token');
-     }
-   }
-   
-   export default new AuthService();
-   ```
-
-2. **Redux Store Setup**
-   ```typescript
-   // src/store/authSlice.ts
-   import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-   import authService from '../services/auth';
-   
-   export const login = createAsyncThunk(
-     'auth/login',
-     async (credentials: LoginCredentials) => {
-       return await authService.login(credentials);
-     }
-   );
-   
-   const authSlice = createSlice({
-     name: 'auth',
-     initialState: {
-       user: authService.getCurrentUser(),
-       isAuthenticated: !!authService.getToken(),
-       loading: false,
-       error: null,
-     },
-     reducers: {
-       logout: (state) => {
-         authService.logout();
-         state.user = null;
-         state.isAuthenticated = false;
-       },
-     },
-     extraReducers: (builder) => {
-       builder
-         .addCase(login.pending, (state) => {
-           state.loading = true;
-           state.error = null;
-         })
-         .addCase(login.fulfilled, (state, action) => {
-           state.loading = false;
-           state.user = action.payload.user;
-           state.isAuthenticated = true;
-         })
-         .addCase(login.rejected, (state, action) => {
-           state.loading = false;
-           state.error = action.error.message;
-         });
-     },
-   });
-   
-   export const { logout } = authSlice.actions;
-   export default authSlice.reducer;
-   ```
-
-3. **Main App Component**
+3. **App Structure**
    ```typescript
    // src/App.tsx
-   import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-   import { Provider } from 'react-redux';
+   import { BrowserRouter, Routes, Route } from 'react-router-dom';
    import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-   import { store } from './store';
    import Layout from './components/Layout';
-   import Dashboard from './pages/Dashboard';
-   import Onboarding from './pages/Onboarding';
-   import Deployments from './pages/Deployments';
-   import Incidents from './pages/Incidents';
-   import KnowledgeBase from './pages/KnowledgeBase';
-   import Login from './pages/Login';
-   import PrivateRoute from './components/PrivateRoute';
-   
+   import PipelineModule from './modules/PipelineModule';
+   import InfrastructureModule from './modules/InfrastructureModule';
+   import MonitoringModule from './modules/MonitoringModule';
+   import KBConnectModule from './modules/KBConnectModule';
+
    const queryClient = new QueryClient();
-   
+
    function App() {
      return (
-       <Provider store={store}>
-         <QueryClientProvider client={queryClient}>
-           <Router>
+       <QueryClientProvider client={queryClient}>
+         <BrowserRouter>
+           <Layout>
              <Routes>
-               <Route path="/login" element={<Login />} />
-               <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
-                 <Route index element={<Navigate to="/dashboard" />} />
-                 <Route path="dashboard" element={<Dashboard />} />
-                 <Route path="onboarding" element={<Onboarding />} />
-                 <Route path="deployments" element={<Deployments />} />
-                 <Route path="incidents" element={<Incidents />} />
-                 <Route path="knowledge" element={<KnowledgeBase />} />
-               </Route>
+               <Route path="/" element={<PipelineModule />} />
+               <Route path="/pipeline" element={<PipelineModule />} />
+               <Route path="/infrastructure" element={<InfrastructureModule />} />
+               <Route path="/monitoring" element={<MonitoringModule />} />
+               <Route path="/kb" element={<KBConnectModule />} />
              </Routes>
-           </Router>
-         </QueryClientProvider>
-       </Provider>
-     );
-   }
-   
-   export default App;
-   ```
-
-### Day 7: Onboarding Wizard Implementation
-
-#### Morning (4 hours)
-1. **Onboarding Wizard Component**
-   ```typescript
-   // src/components/onboarding/OnboardingWizard.tsx
-   import { useState } from 'react';
-   import { useForm } from 'react-hook-form';
-   import { zodResolver } from '@hookform/resolvers/zod';
-   import * as z from 'zod';
-   import RepositoryForm from './RepositoryForm';
-   import StackDetection from './StackDetection';
-   import ConfigurationOptions from './ConfigurationOptions';
-   import PreviewDiff from './PreviewDiff';
-   import ApprovalStep from './ApprovalStep';
-   
-   const steps = [
-     { id: 'repository', name: 'Repository', component: RepositoryForm },
-     { id: 'detection', name: 'Stack Detection', component: StackDetection },
-     { id: 'configuration', name: 'Configuration', component: ConfigurationOptions },
-     { id: 'preview', name: 'Preview Changes', component: PreviewDiff },
-     { id: 'approval', name: 'Approval', component: ApprovalStep },
-   ];
-   
-   export default function OnboardingWizard() {
-     const [currentStep, setCurrentStep] = useState(0);
-     const [wizardData, setWizardData] = useState({});
-     
-     const handleNext = (data: any) => {
-       setWizardData({ ...wizardData, ...data });
-       setCurrentStep(currentStep + 1);
-     };
-     
-     const handleBack = () => {
-       setCurrentStep(currentStep - 1);
-     };
-     
-     const CurrentStepComponent = steps[currentStep].component;
-     
-     return (
-       <div className="max-w-4xl mx-auto p-6">
-         <div className="mb-8">
-           <nav aria-label="Progress">
-             <ol className="flex items-center">
-               {steps.map((step, index) => (
-                 <li key={step.id} className="relative flex-1">
-                   <div className={`flex items-center ${
-                     index <= currentStep ? 'text-primary-600' : 'text-gray-400'
-                   }`}>
-                     <span className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                       index < currentStep ? 'bg-primary-600' :
-                       index === currentStep ? 'border-2 border-primary-600' :
-                       'border-2 border-gray-300'
-                     }`}>
-                       {index < currentStep ? (
-                         <CheckIcon className="h-6 w-6 text-white" />
-                       ) : (
-                         <span>{index + 1}</span>
-                       )}
-                     </span>
-                     <span className="ml-4 text-sm font-medium">{step.name}</span>
-                   </div>
-                   {index < steps.length - 1 && (
-                     <div className="absolute top-5 left-10 -right-10 h-0.5 bg-gray-200">
-                       <div className={`h-full bg-primary-600 transition-all ${
-                         index < currentStep ? 'w-full' : 'w-0'
-                       }`} />
-                     </div>
-                   )}
-                 </li>
-               ))}
-             </ol>
-           </nav>
-         </div>
-         
-         <div className="bg-white shadow rounded-lg p-6">
-           <CurrentStepComponent
-             data={wizardData}
-             onNext={handleNext}
-             onBack={handleBack}
-             isFirstStep={currentStep === 0}
-             isLastStep={currentStep === steps.length - 1}
-           />
-         </div>
-       </div>
-     );
-   }
-   ```
-
-2. **Repository Form Component**
-   ```typescript
-   // src/components/onboarding/RepositoryForm.tsx
-   import { useForm } from 'react-hook-form';
-   import { zodResolver } from '@hookform/resolvers/zod';
-   import * as z from 'zod';
-   
-   const schema = z.object({
-     repoUrl: z.string().url('Must be a valid URL'),
-     target: z.enum(['k8s', 'serverless', 'static']),
-     environments: z.array(z.string()).min(1, 'Select at least one environment'),
-     branch: z.string().optional(),
-   });
-   
-   type FormData = z.infer<typeof schema>;
-   
-   export default function RepositoryForm({ data, onNext }) {
-     const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
-       resolver: zodResolver(schema),
-       defaultValues: data,
-     });
-   
-     const onSubmit = (formData: FormData) => {
-       onNext(formData);
-     };
-   
-     return (
-       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-         <div>
-           <label className="block text-sm font-medium text-gray-700">
-             Repository URL
-           </label>
-           <input
-             type="url"
-             {...register('repoUrl')}
-             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
-             placeholder="https://github.com/your-org/your-repo"
-           />
-           {errors.repoUrl && (
-             <p className="mt-1 text-sm text-red-600">{errors.repoUrl.message}</p>
-           )}
-         </div>
-   
-         <div>
-           <label className="block text-sm font-medium text-gray-700">
-             Deployment Target
-           </label>
-           <select
-             {...register('target')}
-             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
-           >
-             <option value="k8s">Kubernetes</option>
-             <option value="serverless">Serverless (Lambda/Functions)</option>
-             <option value="static">Static Site</option>
-           </select>
-         </div>
-   
-         <div>
-           <label className="block text-sm font-medium text-gray-700">
-             Environments
-           </label>
-           <div className="mt-2 space-y-2">
-             {['development', 'staging', 'production'].map((env) => (
-               <label key={env} className="flex items-center">
-                 <input
-                   type="checkbox"
-                   value={env}
-                   {...register('environments')}
-                   className="rounded border-gray-300 text-primary-600"
-                 />
-                 <span className="ml-2 text-sm text-gray-700">{env}</span>
-               </label>
-             ))}
-           </div>
-           {errors.environments && (
-             <p className="mt-1 text-sm text-red-600">{errors.environments.message}</p>
-           )}
-         </div>
-   
-         <div className="flex justify-end">
-           <button
-             type="submit"
-             className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-           >
-             Next: Detect Stack
-           </button>
-         </div>
-       </form>
+           </Layout>
+         </BrowserRouter>
+       </QueryClientProvider>
      );
    }
    ```
 
 #### Afternoon (4 hours)
-1. **Stack Detection Component**
+1. **Pipeline Agent Module**
    ```typescript
-   // src/components/onboarding/StackDetection.tsx
-   import { useEffect, useState } from 'react';
-   import { useQuery } from '@tanstack/react-query';
-   import api from '../../services/api';
-   
-   export default function StackDetection({ data, onNext, onBack }) {
-     const [detectedStack, setDetectedStack] = useState(null);
-     
-     const { data: detection, isLoading, error } = useQuery({
-       queryKey: ['detectStack', data.repoUrl],
-       queryFn: () => api.post('/onboard/detect-stack', { repoUrl: data.repoUrl }),
-     });
-     
-     useEffect(() => {
-       if (detection) {
-         setDetectedStack(detection.data);
-       }
-     }, [detection]);
-     
-     const handleConfirm = () => {
-       onNext({ stack: detectedStack });
-     };
-     
-     if (isLoading) {
-       return (
-         <div className="flex items-center justify-center h-64">
-           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-           <span className="ml-3">Analyzing repository...</span>
-         </div>
-       );
-     }
-     
-     return (
-       <div className="space-y-6">
-         <h3 className="text-lg font-medium">Detected Technology Stack</h3>
-         
-         {detectedStack && (
-           <div className="bg-gray-50 rounded-lg p-4">
-             <div className="grid grid-cols-2 gap-4">
-               <div>
-                 <h4 className="font-medium text-gray-700">Languages</h4>
-                 <ul className="mt-2 space-y-1">
-                   {detectedStack.languages.map((lang) => (
-                     <li key={lang} className="flex items-center">
-                       <CheckIcon className="h-4 w-4 text-green-500 mr-2" />
-                       {lang}
-                     </li>
-                   ))}
-                 </ul>
-               </div>
-               
-               <div>
-                 <h4 className="font-medium text-gray-700">Frameworks</h4>
-                 <ul className="mt-2 space-y-1">
-                   {detectedStack.frameworks.map((framework) => (
-                     <li key={framework} className="flex items-center">
-                       <CheckIcon className="h-4 w-4 text-green-500 mr-2" />
-                       {framework}
-                     </li>
-                   ))}
-                 </ul>
-               </div>
-               
-               <div>
-                 <h4 className="font-medium text-gray-700">Build Tools</h4>
-                 <ul className="mt-2 space-y-1">
-                   {detectedStack.buildTools.map((tool) => (
-                     <li key={tool} className="flex items-center">
-                       <CheckIcon className="h-4 w-4 text-green-500 mr-2" />
-                       {tool}
-                     </li>
-                   ))}
-                 </ul>
-               </div>
-               
-               <div>
-                 <h4 className="font-medium text-gray-700">Dependencies</h4>
-                 <p className="mt-2 text-sm text-gray-600">
-                   {detectedStack.dependencies.length} dependencies detected
-                 </p>
-               </div>
-             </div>
-           </div>
-         )}
-         
-         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-           <h4 className="font-medium text-blue-900">AI Recommendations</h4>
-           <ul className="mt-2 space-y-2 text-sm text-blue-800">
-             <li>• Suggested CI/CD: GitHub Actions with Docker</li>
-             <li>• Recommended deployment strategy: Blue-Green deployment</li>
-             <li>• Security scanning: SAST with SonarQube, DAST with OWASP ZAP</li>
-             <li>• Monitoring: Prometheus + Grafana stack</li>
-           </ul>
-         </div>
-         
-         <div className="flex justify-between">
-           <button
-             onClick={onBack}
-             className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-           >
-             Back
-           </button>
-           <button
-             onClick={handleConfirm}
-             className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-           >
-             Next: Configure
-           </button>
-         </div>
-       </div>
-     );
-   }
-   ```
-
-2. **Preview Diff Component**
-   ```typescript
-   // src/components/onboarding/PreviewDiff.tsx
+   // src/modules/PipelineModule.tsx
    import { useState } from 'react';
-   import { useQuery } from '@tanstack/react-query';
-   import ReactDiffViewer from 'react-diff-viewer';
-   import api from '../../services/api';
-   
-   export default function PreviewDiff({ data, onNext, onBack }) {
-     const [selectedFile, setSelectedFile] = useState(0);
-     
-     const { data: preview, isLoading } = useQuery({
-       queryKey: ['preview', data],
-       queryFn: () => api.post('/onboard/generate-preview', data),
-     });
-     
-     if (isLoading) {
-       return (
-         <div className="flex items-center justify-center h-64">
-           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-           <span className="ml-3">Generating configuration...</span>
-         </div>
-       );
-     }
-     
-     const files = preview?.data?.files || [];
-     
-     return (
-       <div className="space-y-4">
-         <h3 className="text-lg font-medium">Preview Generated Configuration</h3>
-         
-         <div className="flex space-x-4">
-           <div className="w-1/4">
-             <h4 className="font-medium text-sm text-gray-700 mb-2">Files to be created</h4>
-             <ul className="space-y-1">
-               {files.map((file, index) => (
-                 <li
-                   key={file.path}
-                   onClick={() => setSelectedFile(index)}
-                   className={`cursor-pointer px-3 py-2 rounded text-sm ${
-                     selectedFile === index
-                       ? 'bg-primary-100 text-primary-700'
-                       : 'hover:bg-gray-100'
-                   }`}
-                 >
-                   {file.path}
-                 </li>
-               ))}
-             </ul>
-           </div>
-           
-           <div className="flex-1">
-             {files[selectedFile] && (
-               <div className="border rounded-lg overflow-hidden">
-                 <div className="bg-gray-100 px-4 py-2 border-b">
-                   <span className="font-mono text-sm">{files[selectedFile].path}</span>
-                 </div>
-                 <ReactDiffViewer
-                   oldValue=""
-                   newValue={files[selectedFile].content}
-                   splitView={false}
-                   showDiffOnly={false}
-                   styles={{
-                     contentText: { fontSize: '14px' }
-                   }}
-                 />
-               </div>
-             )}
-           </div>
-         </div>
-         
-         <div className="flex justify-between">
-           <button
-             onClick={onBack}
-             className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-           >
-             Back
-           </button>
-           <button
-             onClick={() => onNext({ preview: files })}
-             className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-           >
-             Next: Approve & Deploy
-           </button>
-         </div>
-       </div>
-     );
-   }
-   ```
-
-### Day 8: Deployment Workflows & Live Logs
-
-#### Morning (4 hours)
-1. **Deployment List Component**
-   ```typescript
-   // src/pages/Deployments.tsx
-   import { useState } from 'react';
-   import { useQuery } from '@tanstack/react-query';
-   import DeploymentList from '../components/deployments/DeploymentList';
-   import DeploymentDetails from '../components/deployments/DeploymentDetails';
-   import api from '../services/api';
-   
-   export default function Deployments() {
-     const [selectedDeployment, setSelectedDeployment] = useState(null);
-     
-     const { data: deployments, isLoading } = useQuery({
-       queryKey: ['deployments'],
-       queryFn: () => api.get('/deployments'),
-       refetchInterval: 5000, // Auto-refresh every 5 seconds
-     });
-     
-     return (
-       <div className="container mx-auto px-4 py-8">
-         <div className="flex justify-between items-center mb-6">
-           <h1 className="text-2xl font-bold">Deployments</h1>
-           <button className="px-4 py-2 bg-primary-600 text-white rounded-md">
-             New Deployment
-           </button>
-         </div>
-         
-         <div className="grid grid-cols-12 gap-6">
-           <div className="col-span-4">
-             <DeploymentList
-               deployments={deployments?.data || []}
-               selectedId={selectedDeployment?.id}
-               onSelect={setSelectedDeployment}
-               isLoading={isLoading}
-             />
-           </div>
-           
-           <div className="col-span-8">
-             {selectedDeployment ? (
-               <DeploymentDetails deployment={selectedDeployment} />
-             ) : (
-               <div className="bg-gray-50 rounded-lg p-12 text-center text-gray-500">
-                 Select a deployment to view details
-               </div>
-             )}
-           </div>
-         </div>
-       </div>
-     );
-   }
-   ```
-
-2. **Live Logs Component with WebSocket**
-   ```typescript
-   // src/components/deployments/LiveLogs.tsx
-   import { useEffect, useState, useRef } from 'react';
-   import useWebSocket from '../../hooks/useWebSocket';
-   
-   export default function LiveLogs({ deploymentId }) {
-     const [logs, setLogs] = useState<string[]>([]);
-     const logsEndRef = useRef<HTMLDivElement>(null);
-     const { socket, isConnected } = useWebSocket();
-     
-     useEffect(() => {
-       if (socket && isConnected) {
-         socket.emit('subscribe-logs', { deploymentId });
-         
-         socket.on('log-entry', (entry) => {
-           setLogs((prev) => [...prev, entry]);
-         });
-         
-         return () => {
-           socket.emit('unsubscribe-logs', { deploymentId });
-           socket.off('log-entry');
-         };
-       }
-     }, [socket, isConnected, deploymentId]);
-     
-     useEffect(() => {
-       logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-     }, [logs]);
-     
-     return (
-       <div className="bg-gray-900 rounded-lg p-4">
-         <div className="flex items-center justify-between mb-2">
-           <h3 className="text-white font-medium">Live Logs</h3>
-           <div className="flex items-center space-x-2">
-             <div className={`w-2 h-2 rounded-full ${
-               isConnected ? 'bg-green-400 animate-pulse' : 'bg-red-400'
-             }`} />
-             <span className="text-xs text-gray-400">
-               {isConnected ? 'Connected' : 'Disconnected'}
-             </span>
-           </div>
-         </div>
-         
-         <div className="bg-black rounded p-3 h-96 overflow-y-auto font-mono text-xs">
-           {logs.map((log, index) => (
-             <div key={index} className="text-green-400 whitespace-pre-wrap">
-               {log}
-             </div>
-           ))}
-           <div ref={logsEndRef} />
-         </div>
-       </div>
-     );
-   }
-   ```
-
-#### Afternoon (4 hours)
-1. **Deployment Approval System**
-   ```typescript
-   // src/components/deployments/ApprovalModal.tsx
-   import { useState } from 'react';
+   import { useForm } from 'react-hook-form';
    import { useMutation } from '@tanstack/react-query';
-   import api from '../../services/api';
-   
-   export default function ApprovalModal({ deployment, onClose, onApprove }) {
-     const [comment, setComment] = useState('');
-     const [requireSecondApproval, setRequireSecondApproval] = useState(false);
-     
-     const approveMutation = useMutation({
-       mutationFn: (data) => api.post(`/deployments/${deployment.id}/approve`, data),
-       onSuccess: () => {
-         onApprove();
-         onClose();
-       },
+   import api from '../services/api';
+   import PreviewPanel from '../components/PreviewPanel';
+   import CitationList from '../components/CitationList';
+
+   export default function PipelineModule() {
+     const [preview, setPreview] = useState(null);
+     const [prUrl, setPrUrl] = useState(null);
+
+     const { register, handleSubmit, formState: { errors } } = useForm();
+
+     const generateMutation = useMutation({
+       mutationFn: (data) => api.post('/api/pipeline/generate', data),
+       onSuccess: (response) => {
+         setPreview(response.data);
+       }
      });
-     
-     const handleApprove = () => {
-       approveMutation.mutate({
-         comment,
-         requireSecondApproval,
+
+     const createPrMutation = useMutation({
+       mutationFn: (data) => api.post('/api/pipeline/create-pr', data),
+       onSuccess: (response) => {
+         setPrUrl(response.data.pr_url);
+       }
+     });
+
+     const onSubmit = (data) => {
+       generateMutation.mutate(data);
+     };
+
+     const handleCreatePr = () => {
+       createPrMutation.mutate({
+         ...preview,
+         repo_url: formData.repo_url
        });
      };
-     
+
      return (
-       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-         <div className="bg-white rounded-lg p-6 max-w-lg w-full">
-           <h2 className="text-lg font-bold mb-4">Approve Deployment</h2>
-           
-           <div className="mb-4">
-             <h3 className="font-medium mb-2">Deployment Summary</h3>
-             <div className="bg-gray-50 rounded p-3 text-sm">
-               <p><strong>Service:</strong> {deployment.service}</p>
-               <p><strong>Environment:</strong> {deployment.environment}</p>
-               <p><strong>Version:</strong> {deployment.version}</p>
-               <p><strong>Changes:</strong> {deployment.changesSummary}</p>
-             </div>
-           </div>
-           
-           <div className="mb-4">
-             <h3 className="font-medium mb-2">Dry Run Results</h3>
-             <div className="bg-green-50 border border-green-200 rounded p-3 text-sm">
-               <p className="text-green-800">✓ All checks passed</p>
-               <ul className="mt-2 space-y-1 text-green-700">
-                 <li>• Policy validation: Passed</li>
-                 <li>• Resource availability: Sufficient</li>
-                 <li>• Dependencies: All healthy</li>
-                 <li>• Estimated rollout time: 5 minutes</li>
-               </ul>
-             </div>
-           </div>
-           
-           <div className="mb-4">
-             <label className="block text-sm font-medium mb-2">
-               Approval Comment
-             </label>
-             <textarea
-               value={comment}
-               onChange={(e) => setComment(e.target.value)}
-               className="w-full border rounded-md p-2"
-               rows={3}
-               placeholder="Optional comment..."
-             />
-           </div>
-           
-           {deployment.environment === 'production' && (
-             <div className="mb-4">
-               <label className="flex items-center">
-                 <input
-                   type="checkbox"
-                   checked={requireSecondApproval}
-                   onChange={(e) => setRequireSecondApproval(e.target.checked)}
-                   className="mr-2"
-                 />
-                 <span className="text-sm">Require second approval (recommended for production)</span>
-               </label>
-             </div>
-           )}
-           
-           <div className="flex justify-end space-x-3">
-             <button
-               onClick={onClose}
-               className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-             >
-               Cancel
-             </button>
-             <button
-               onClick={handleApprove}
-               disabled={approveMutation.isPending}
-               className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
-             >
-               {approveMutation.isPending ? 'Approving...' : 'Approve & Deploy'}
-             </button>
-           </div>
-         </div>
-       </div>
-     );
-   }
-   ```
+       <div className="container mx-auto p-6">
+         <h1 className="text-2xl font-bold mb-6">Pipeline Agent</h1>
+         <p className="text-gray-600 mb-8">
+           Generate CI/CD pipelines for new or existing projects
+         </p>
 
-2. **Health Check Dashboard**
-   ```typescript
-   // src/components/deployments/HealthStatus.tsx
-   import { useQuery } from '@tanstack/react-query';
-   import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-   import api from '../../services/api';
-   
-   export default function HealthStatus({ deploymentId }) {
-     const { data: health } = useQuery({
-       queryKey: ['health', deploymentId],
-       queryFn: () => api.get(`/deployments/${deploymentId}/health`),
-       refetchInterval: 10000,
-     });
-     
-     const getStatusColor = (status: string) => {
-       switch (status) {
-         case 'healthy': return 'text-green-500';
-         case 'degraded': return 'text-yellow-500';
-         case 'unhealthy': return 'text-red-500';
-         default: return 'text-gray-500';
-       }
-     };
-     
-     return (
-       <div className="bg-white rounded-lg shadow p-6">
-         <h3 className="text-lg font-medium mb-4">Health Status</h3>
-         
-         <div className="grid grid-cols-3 gap-4 mb-6">
-           <div className="text-center">
-             <div className={`text-3xl font-bold ${getStatusColor(health?.data?.status)}`}>
-               {health?.data?.status || 'Unknown'}
-             </div>
-             <div className="text-sm text-gray-500">Overall Status</div>
-           </div>
-           
-           <div className="text-center">
-             <div className="text-3xl font-bold">
-               {health?.data?.uptime || '0'}%
-             </div>
-             <div className="text-sm text-gray-500">Uptime</div>
-           </div>
-           
-           <div className="text-center">
-             <div className="text-3xl font-bold">
-               {health?.data?.responseTime || '0'}ms
-             </div>
-             <div className="text-sm text-gray-500">Avg Response Time</div>
-           </div>
-         </div>
-         
-         <div className="h-64">
-           <ResponsiveContainer width="100%" height="100%">
-             <LineChart data={health?.data?.metrics || []}>
-               <CartesianGrid strokeDasharray="3 3" />
-               <XAxis dataKey="timestamp" />
-               <YAxis />
-               <Tooltip />
-               <Line type="monotone" dataKey="cpu" stroke="#3b82f6" name="CPU %" />
-               <Line type="monotone" dataKey="memory" stroke="#10b981" name="Memory %" />
-               <Line type="monotone" dataKey="requests" stroke="#f59e0b" name="Requests/s" />
-             </LineChart>
-           </ResponsiveContainer>
-         </div>
-       </div>
-     );
-   }
-   ```
+         <div className="grid grid-cols-2 gap-6">
+           {/* Input Form */}
+           <div className="bg-white rounded-lg shadow p-6">
+             <h2 className="text-lg font-semibold mb-4">Repository Configuration</h2>
 
-### Day 9: CI/CD Pipeline Generation
-
-#### Morning (4 hours)
-1. **Pipeline Generator Backend**
-   ```python
-   # backend/app/core/pipeline_generator.py
-   from typing import Dict, Any, List
-   import yaml
-   from jinja2 import Template
-   
-   class PipelineGenerator:
-       def __init__(self):
-           self.templates = self.load_templates()
-       
-       def generate_github_actions(self, config: Dict[str, Any]) -> str:
-           template = Template(self.templates['github_actions'])
-           return template.render(**config)
-       
-       def generate_gitlab_ci(self, config: Dict[str, Any]) -> str:
-           template = Template(self.templates['gitlab_ci'])
-           return template.render(**config)
-       
-       def generate_jenkins(self, config: Dict[str, Any]) -> str:
-           template = Template(self.templates['jenkins'])
-           return template.render(**config)
-       
-       def generate_terraform(self, config: Dict[str, Any]) -> str:
-           """Generate Terraform configuration for infrastructure"""
-           template = Template(self.templates['terraform'])
-           return template.render(**config)
-       
-       def generate_helm_chart(self, config: Dict[str, Any]) -> Dict[str, str]:
-           """Generate Helm chart for Kubernetes deployment"""
-           files = {}
-           files['Chart.yaml'] = self.render_helm_chart(config)
-           files['values.yaml'] = self.render_helm_values(config)
-           files['templates/deployment.yaml'] = self.render_helm_deployment(config)
-           files['templates/service.yaml'] = self.render_helm_service(config)
-           files['templates/ingress.yaml'] = self.render_helm_ingress(config)
-           return files
-   ```
-
-2. **GitHub Actions Template**
-   ```yaml
-   # templates/github_actions.yaml.j2
-   name: {{ pipeline_name }}
-   
-   on:
-     push:
-       branches: {{ branches | join(', ') }}
-     pull_request:
-       branches: {{ branches | join(', ') }}
-   
-   env:
-     REGISTRY: {{ registry }}
-     IMAGE_NAME: {{ image_name }}
-   
-   jobs:
-     test:
-       runs-on: ubuntu-latest
-       steps:
-         - uses: actions/checkout@v3
-         
-         - name: Set up {{ language }}
-           uses: actions/setup-{{ language }}@v3
-           with:
-             {{ language }}-version: '{{ language_version }}'
-         
-         - name: Install dependencies
-           run: {{ install_command }}
-         
-         - name: Run tests
-           run: {{ test_command }}
-         
-         - name: Run security scan
-           uses: aquasecurity/trivy-action@master
-           with:
-             scan-type: 'fs'
-             scan-ref: '.'
-   
-     build:
-       needs: test
-       runs-on: ubuntu-latest
-       steps:
-         - uses: actions/checkout@v3
-         
-         - name: Set up Docker Buildx
-           uses: docker/setup-buildx-action@v2
-         
-         - name: Log in to registry
-           uses: docker/login-action@v2
-           with:
-             registry: {{ registry }}
-             username: ${{ secrets.REGISTRY_USERNAME }}
-             password: ${{ secrets.REGISTRY_PASSWORD }}
-         
-         - name: Build and push Docker image
-           uses: docker/build-push-action@v4
-           with:
-             context: .
-             push: true
-             tags: {{ registry }}/{{ image_name }}:${{ github.sha }}
-   
-     deploy:
-       needs: build
-       runs-on: ubuntu-latest
-       if: github.ref == 'refs/heads/main'
-       steps:
-         - name: Deploy to {{ environment }}
-           run: |
-             # Deployment commands based on target
-             {% if target == 'k8s' %}
-             kubectl set image deployment/{{ app_name }} {{ app_name }}={{ registry }}/{{ image_name }}:${{ github.sha }}
-             {% elif target == 'serverless' %}
-             serverless deploy --stage {{ environment }}
-             {% elif target == 'static' %}
-             aws s3 sync ./dist s3://{{ bucket_name }}
-             {% endif %}
-   ```
-
-#### Afternoon (4 hours)
-1. **OPA Policy Implementation**
-   ```python
-   # backend/app/core/policy_engine.py
-   from opa_client import OpaClient
-   import json
-   from typing import Dict, Any, List
-   
-   class PolicyEngine:
-       def __init__(self, opa_url: str = "http://localhost:8181"):
-           self.client = OpaClient(opa_url)
-           self.load_policies()
-       
-       def load_policies(self):
-           """Load default policies"""
-           policies = [
-               self.deployment_window_policy(),
-               self.approval_policy(),
-               self.resource_limit_policy(),
-               self.security_policy()
-           ]
-           
-           for policy in policies:
-               self.client.update_policy(policy['name'], policy['content'])
-       
-       def deployment_window_policy(self) -> Dict[str, str]:
-           return {
-               'name': 'deployment_window',
-               'content': '''
-               package deployment.window
-               
-               import future.keywords.if
-               import future.keywords.in
-               
-               default allow = false
-               
-               # Allow deployments during business hours (9 AM - 6 PM UTC)
-               allow if {
-                   current_hour := time.clock([time.now_ns(), "UTC"])[0]
-                   current_hour >= 9
-                   current_hour <= 18
-               }
-               
-               # Always allow staging deployments
-               allow if {
-                   input.environment == "staging"
-               }
-               
-               # Require approval for production outside business hours
-               allow if {
-                   input.environment == "production"
-                   input.has_approval == true
-               }
-               '''
-           }
-       
-       def check_deployment_policy(self, deployment: Dict[str, Any]) -> Dict[str, Any]:
-           """Check if deployment meets policy requirements"""
-           result = self.client.check_policy('deployment/window', deployment)
-           
-           if not result['allow']:
-               return {
-                   'allowed': False,
-                   'reason': 'Deployment blocked by policy',
-                   'violations': result.get('violations', [])
-               }
-           
-           return {'allowed': True}
-   ```
-
-2. **Policy UI Component**
-   ```typescript
-   // src/components/policies/PolicyViewer.tsx
-   import { useState } from 'react';
-   import { useQuery } from '@tanstack/react-query';
-   import api from '../../services/api';
-   
-   export default function PolicyViewer() {
-     const [selectedPolicy, setSelectedPolicy] = useState(null);
-     
-     const { data: policies } = useQuery({
-       queryKey: ['policies'],
-       queryFn: () => api.get('/policies'),
-     });
-     
-     return (
-       <div className="bg-white rounded-lg shadow">
-         <div className="p-6 border-b">
-           <h2 className="text-lg font-medium">Active Policies</h2>
-         </div>
-         
-         <div className="flex">
-           <div className="w-1/3 border-r">
-             <ul className="divide-y">
-               {policies?.data?.map((policy) => (
-                 <li
-                   key={policy.id}
-                   onClick={() => setSelectedPolicy(policy)}
-                   className={`px-4 py-3 cursor-pointer hover:bg-gray-50 ${
-                     selectedPolicy?.id === policy.id ? 'bg-primary-50' : ''
-                   }`}
-                 >
-                   <div className="font-medium">{policy.name}</div>
-                   <div className="text-sm text-gray-500">{policy.description}</div>
-                 </li>
-               ))}
-             </ul>
-           </div>
-           
-           <div className="flex-1 p-6">
-             {selectedPolicy ? (
+             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
                <div>
-                 <h3 className="font-medium mb-4">{selectedPolicy.name}</h3>
-                 <div className="bg-gray-50 rounded p-4">
-                   <pre className="text-sm font-mono">{selectedPolicy.content}</pre>
-                 </div>
-                 
-                 <div className="mt-4">
-                   <h4 className="font-medium mb-2">Recent Evaluations</h4>
-                   <table className="min-w-full divide-y divide-gray-200">
-                     <thead>
-                       <tr>
-                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Time</th>
-                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Resource</th>
-                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Result</th>
-                       </tr>
-                     </thead>
-                     <tbody className="divide-y divide-gray-200">
-                       {selectedPolicy.evaluations?.map((eval) => (
-                         <tr key={eval.id}>
-                           <td className="px-4 py-2 text-sm">{eval.timestamp}</td>
-                           <td className="px-4 py-2 text-sm">{eval.resource}</td>
-                           <td className="px-4 py-2">
-                             <span className={`px-2 py-1 text-xs rounded ${
-                               eval.allowed
-                                 ? 'bg-green-100 text-green-800'
-                                 : 'bg-red-100 text-red-800'
-                             }`}>
-                               {eval.allowed ? 'Allowed' : 'Denied'}
-                             </span>
-                           </td>
-                         </tr>
-                       ))}
-                     </tbody>
-                   </table>
+                 <label className="block text-sm font-medium mb-2">
+                   Repository URL
+                 </label>
+                 <input
+                   type="url"
+                   {...register('repo_url', { required: 'Repository URL is required' })}
+                   className="w-full border rounded-md px-3 py-2"
+                   placeholder="https://github.com/org/repo"
+                 />
+                 {errors.repo_url && (
+                   <p className="text-red-500 text-sm mt-1">{errors.repo_url.message}</p>
+                 )}
+               </div>
+
+               <div>
+                 <label className="block text-sm font-medium mb-2">
+                   Target Platform
+                 </label>
+                 <select
+                   {...register('target', { required: true })}
+                   className="w-full border rounded-md px-3 py-2"
+                 >
+                   <option value="k8s">Kubernetes</option>
+                   <option value="serverless">Serverless</option>
+                   <option value="static">Static Site</option>
+                 </select>
+               </div>
+
+               <div>
+                 <label className="block text-sm font-medium mb-2">
+                   Environments
+                 </label>
+                 <div className="space-y-2">
+                   {['staging', 'prod'].map(env => (
+                     <label key={env} className="flex items-center">
+                       <input
+                         type="checkbox"
+                         value={env}
+                         {...register('environments')}
+                         className="mr-2"
+                       />
+                       <span className="text-sm">{env}</span>
+                     </label>
+                   ))}
                  </div>
                </div>
+
+               <button
+                 type="submit"
+                 disabled={generateMutation.isPending}
+                 className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+               >
+                 {generateMutation.isPending ? 'Generating...' : 'Generate Pipeline'}
+               </button>
+             </form>
+           </div>
+
+           {/* Preview Panel */}
+           <div className="bg-white rounded-lg shadow p-6">
+             <h2 className="text-lg font-semibold mb-4">Generated Pipeline Preview</h2>
+
+             {preview ? (
+               <div>
+                 <PreviewPanel
+                   content={preview.pipeline}
+                   language="yaml"
+                   filename=".github/workflows/pipeline.yml"
+                 />
+
+                 <div className="mt-4">
+                   <h3 className="font-medium mb-2">KB Citations ({preview.citations.length})</h3>
+                   <CitationList citations={preview.citations} />
+                 </div>
+
+                 <div className="mt-4 flex gap-2">
+                   <button
+                     onClick={handleCreatePr}
+                     disabled={createPrMutation.isPending}
+                     className="flex-1 bg-green-600 text-white py-2 rounded-md hover:bg-green-700 disabled:opacity-50"
+                   >
+                     {createPrMutation.isPending ? 'Creating PR...' : 'Create PR'}
+                   </button>
+                 </div>
+
+                 {prUrl && (
+                   <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded">
+                     <p className="text-green-800">
+                       ✅ PR created successfully:
+                       <a href={prUrl} target="_blank" className="ml-2 underline">
+                         {prUrl}
+                       </a>
+                     </p>
+                   </div>
+                 )}
+               </div>
              ) : (
-               <div className="text-center text-gray-500">
-                 Select a policy to view details
+               <div className="text-center text-gray-500 py-12">
+                 Generate a pipeline to see preview
                </div>
              )}
            </div>
@@ -1235,289 +728,690 @@
    }
    ```
 
-### Day 10: Integration Testing & Polish
+### Day 8: Infrastructure Module & Dry-Run Display
 
 #### Morning (4 hours)
-1. **End-to-End Testing**
+1. **Infrastructure Module UI**
    ```typescript
-   // tests/e2e/onboarding.test.ts
+   // src/modules/InfrastructureModule.tsx
+   import { useState } from 'react';
+   import { useForm } from 'react-hook-form';
+   import { useMutation } from '@tanstack/react-query';
+   import api from '../services/api';
+   import DryRunViewer from '../components/DryRunViewer';
+   import TerraformPlanViewer from '../components/TerraformPlanViewer';
+   import HelmDryRunViewer from '../components/HelmDryRunViewer';
+
+   export default function InfrastructureModule() {
+     const [result, setResult] = useState(null);
+     const { register, handleSubmit } = useForm();
+
+     const generateMutation = useMutation({
+       mutationFn: (data) => api.post('/api/infrastructure/generate', data),
+       onSuccess: (response) => {
+         setResult(response.data);
+       }
+     });
+
+     const createPrMutation = useMutation({
+       mutationFn: (data) => api.post('/api/infrastructure/create-pr', data),
+       onSuccess: (response) => {
+         setResult(prev => ({
+           ...prev,
+           pr_url: response.data.pr_url
+         }));
+       }
+     });
+
+     return (
+       <div className="container mx-auto p-6">
+         <h1 className="text-2xl font-bold mb-6">Infrastructure Agent</h1>
+         <p className="text-gray-600 mb-8">
+           Generate Terraform modules and Helm charts with validation
+         </p>
+
+         <div className="grid grid-cols-12 gap-6">
+           {/* Configuration Form */}
+           <div className="col-span-4 bg-white rounded-lg shadow p-6">
+             <h2 className="text-lg font-semibold mb-4">Infrastructure Configuration</h2>
+
+             <form onSubmit={handleSubmit(generateMutation.mutate)} className="space-y-4">
+               <div>
+                 <label className="block text-sm font-medium mb-2">
+                   Target Platform
+                 </label>
+                 <select
+                   {...register('target', { required: true })}
+                   className="w-full border rounded-md px-3 py-2"
+                 >
+                   <option value="k8s">Kubernetes</option>
+                   <option value="serverless">Serverless (AWS Lambda)</option>
+                   <option value="static">Static Site (S3 + CloudFront)</option>
+                 </select>
+               </div>
+
+               <div>
+                 <label className="block text-sm font-medium mb-2">
+                   Environments
+                 </label>
+                 <div className="space-y-2">
+                   {['staging', 'prod'].map(env => (
+                     <label key={env} className="flex items-center">
+                       <input
+                         type="checkbox"
+                         value={env}
+                         {...register('environments')}
+                         className="mr-2"
+                       />
+                       <span className="text-sm">{env}</span>
+                     </label>
+                   ))}
+                 </div>
+               </div>
+
+               <div>
+                 <label className="block text-sm font-medium mb-2">
+                   Domain
+                 </label>
+                 <input
+                   type="text"
+                   {...register('domain')}
+                   className="w-full border rounded-md px-3 py-2"
+                   placeholder="app.example.com"
+                 />
+               </div>
+
+               <div>
+                 <label className="block text-sm font-medium mb-2">
+                   Container Registry
+                 </label>
+                 <input
+                   type="text"
+                   {...register('registry')}
+                   className="w-full border rounded-md px-3 py-2"
+                   placeholder="docker.io/myorg"
+                 />
+               </div>
+
+               <div>
+                 <label className="block text-sm font-medium mb-2">
+                   Secrets Strategy
+                 </label>
+                 <select
+                   {...register('secrets_strategy')}
+                   className="w-full border rounded-md px-3 py-2"
+                 >
+                   <option value="aws-secrets-manager">AWS Secrets Manager</option>
+                   <option value="k8s-secrets">Kubernetes Secrets</option>
+                   <option value="vault">HashiCorp Vault</option>
+                 </select>
+               </div>
+
+               <button
+                 type="submit"
+                 disabled={generateMutation.isPending}
+                 className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+               >
+                 {generateMutation.isPending ? 'Generating...' : 'Generate Infrastructure'}
+               </button>
+             </form>
+           </div>
+
+           {/* Results Panel */}
+           <div className="col-span-8">
+             {result && (
+               <div className="space-y-6">
+                 {/* Terraform Plan Results */}
+                 <div className="bg-white rounded-lg shadow p-6">
+                   <h2 className="text-lg font-semibold mb-4">Terraform Plan</h2>
+                   <TerraformPlanViewer plan={result.terraform_plan} />
+
+                   {result.terraform_plan?.summary && (
+                     <div className="mt-4 p-3 bg-gray-50 rounded">
+                       <h3 className="font-medium mb-2">Plan Summary</h3>
+                       <div className="flex gap-4 text-sm">
+                         <span className="text-green-600">
+                           + {result.terraform_plan.summary.add} to add
+                         </span>
+                         <span className="text-yellow-600">
+                           ~ {result.terraform_plan.summary.change} to change
+                         </span>
+                         <span className="text-red-600">
+                           - {result.terraform_plan.summary.destroy} to destroy
+                         </span>
+                       </div>
+                     </div>
+                   )}
+                 </div>
+
+                 {/* Helm Dry-Run Results */}
+                 {result.helm_dry_run && (
+                   <div className="bg-white rounded-lg shadow p-6">
+                     <h2 className="text-lg font-semibold mb-4">Helm Dry-Run</h2>
+                     <HelmDryRunViewer dryRun={result.helm_dry_run} />
+                   </div>
+                 )}
+
+                 {/* Citations */}
+                 <div className="bg-white rounded-lg shadow p-6">
+                   <h3 className="font-medium mb-2">KB Citations</h3>
+                   <ul className="space-y-1 text-sm">
+                     {result.citations.map((citation, idx) => (
+                       <li key={idx} className="text-gray-600">
+                         • {citation}
+                       </li>
+                     ))}
+                   </ul>
+                 </div>
+
+                 {/* Action Buttons */}
+                 <div className="bg-white rounded-lg shadow p-6">
+                   {!result.pr_url ? (
+                     <button
+                       onClick={() => createPrMutation.mutate(result)}
+                       disabled={createPrMutation.isPending}
+                       className="w-full bg-green-600 text-white py-2 rounded-md hover:bg-green-700 disabled:opacity-50"
+                     >
+                       {createPrMutation.isPending ? 'Creating PR...' : 'Create PR with Artifacts'}
+                     </button>
+                   ) : (
+                     <div className="p-3 bg-green-50 border border-green-200 rounded">
+                       <p className="text-green-800">
+                         ✅ PR created with dry-run artifacts:
+                         <a href={result.pr_url} target="_blank" className="ml-2 underline">
+                           {result.pr_url}
+                         </a>
+                       </p>
+                     </div>
+                   )}
+                 </div>
+               </div>
+             )}
+           </div>
+         </div>
+       </div>
+     );
+   }
+   ```
+
+2. **Dry-Run Viewer Components**
+   ```typescript
+   // src/components/TerraformPlanViewer.tsx
+   import { useState } from 'react';
+   import SyntaxHighlighter from 'react-syntax-highlighter';
+   import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
+
+   export default function TerraformPlanViewer({ plan }) {
+     const [view, setView] = useState<'summary' | 'raw'>('summary');
+
+     if (!plan) return null;
+
+     return (
+       <div>
+         <div className="flex gap-2 mb-4">
+           <button
+             onClick={() => setView('summary')}
+             className={`px-3 py-1 rounded ${
+               view === 'summary' ? 'bg-blue-600 text-white' : 'bg-gray-200'
+             }`}
+           >
+             Summary
+           </button>
+           <button
+             onClick={() => setView('raw')}
+             className={`px-3 py-1 rounded ${
+               view === 'raw' ? 'bg-blue-600 text-white' : 'bg-gray-200'
+             }`}
+           >
+             Raw Output
+           </button>
+         </div>
+
+         {view === 'summary' ? (
+           <div>
+             <div className={`p-3 rounded mb-2 ${
+               plan.status === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
+             }`}>
+               Status: {plan.status}
+             </div>
+
+             {plan.summary?.resources && (
+               <div>
+                 <h4 className="font-medium mb-2">Resources to be modified:</h4>
+                 <ul className="space-y-2">
+                   {plan.summary.resources.map((resource, idx) => (
+                     <li key={idx} className="flex items-center gap-2">
+                       <span className={`px-2 py-1 text-xs rounded ${
+                         resource.action === 'create' ? 'bg-green-100 text-green-800' :
+                         resource.action === 'update' ? 'bg-yellow-100 text-yellow-800' :
+                         'bg-red-100 text-red-800'
+                       }`}>
+                         {resource.action}
+                       </span>
+                       <span className="font-mono text-sm">
+                         {resource.type}.{resource.name}
+                       </span>
+                     </li>
+                   ))}
+                 </ul>
+               </div>
+             )}
+           </div>
+         ) : (
+           <div className="max-h-96 overflow-y-auto">
+             <SyntaxHighlighter
+               language="hcl"
+               style={atomOneDark}
+               customStyle={{ padding: '1rem', borderRadius: '0.5rem' }}
+             >
+               {plan.raw_output || plan.output}
+             </SyntaxHighlighter>
+           </div>
+         )}
+       </div>
+     );
+   }
+   ```
+
+### Day 9: PR/MR Artifact Attachment
+
+#### Morning (4 hours)
+1. **PR Creation with Artifacts**
+   ```python
+   # backend/app/core/pr_orchestrator_v2.py
+   from github import Github
+   import gitlab
+   from typing import Dict, Any, List
+   import base64
+   import json
+
+   class PROrchestrator:
+       def __init__(self, github_token: str, gitlab_token: str):
+           self.github = Github(github_token)
+           self.gitlab = gitlab.Gitlab('https://gitlab.com', private_token=gitlab_token)
+
+       def create_pr_with_artifacts(self,
+                                   repo_url: str,
+                                   files: Dict[str, str],
+                                   title: str,
+                                   body: str,
+                                   artifacts: Dict[str, Any]) -> str:
+           """Create PR/MR with dry-run artifacts attached"""
+
+           if "github.com" in repo_url:
+               return self._create_github_pr_with_artifacts(
+                   repo_url, files, title, body, artifacts
+               )
+           else:
+               return self._create_gitlab_mr_with_artifacts(
+                   repo_url, files, title, body, artifacts
+               )
+
+       def _create_github_pr_with_artifacts(self,
+                                           repo_url: str,
+                                           files: Dict[str, str],
+                                           title: str,
+                                           body: str,
+                                           artifacts: Dict[str, Any]) -> str:
+           """Create GitHub PR with artifacts as comments"""
+
+           # Parse repo from URL
+           repo_parts = repo_url.replace('https://github.com/', '').split('/')
+           repo = self.github.get_repo(f"{repo_parts[0]}/{repo_parts[1]}")
+
+           # Create branch
+           main_branch = repo.get_branch('main')
+           branch_name = f"f-ops/{title.lower().replace(' ', '-')[:30]}"
+           repo.create_git_ref(
+               ref=f"refs/heads/{branch_name}",
+               sha=main_branch.commit.sha
+           )
+
+           # Add files to branch
+           for path, content in files.items():
+               repo.create_file(
+                   path=path,
+                   message=f"Add {path}",
+                   content=content,
+                   branch=branch_name
+               )
+
+           # Create PR
+           pr = repo.create_pull(
+               title=f"[F-Ops] {title}",
+               body=body,
+               head=branch_name,
+               base='main'
+           )
+
+           # Add artifacts as comments
+           self._add_artifacts_to_github_pr(pr, artifacts)
+
+           return pr.html_url
+
+       def _add_artifacts_to_github_pr(self, pr, artifacts: Dict[str, Any]):
+           """Add dry-run artifacts as formatted PR comments"""
+
+           # Format Terraform plan
+           if artifacts.get('terraform_plan'):
+               terraform_comment = self._format_terraform_plan_comment(
+                   artifacts['terraform_plan']
+               )
+               pr.create_issue_comment(terraform_comment)
+
+           # Format Helm dry-run
+           if artifacts.get('helm_dry_run'):
+               helm_comment = self._format_helm_dry_run_comment(
+                   artifacts['helm_dry_run']
+               )
+               pr.create_issue_comment(helm_comment)
+
+           # Add citations
+           if artifacts.get('citations'):
+               citations_comment = self._format_citations_comment(
+                   artifacts['citations']
+               )
+               pr.create_issue_comment(citations_comment)
+
+       def _format_terraform_plan_comment(self, plan: Dict) -> str:
+           """Format Terraform plan as markdown comment"""
+           comment = "## 📋 Terraform Plan Results\n\n"
+
+           if plan['status'] == 'success':
+               comment += "✅ **Plan executed successfully**\n\n"
+
+               if plan.get('summary'):
+                   comment += "### Summary\n"
+                   comment += f"- 🟢 **{plan['summary']['add']}** resources to add\n"
+                   comment += f"- 🟡 **{plan['summary']['change']}** resources to change\n"
+                   comment += f"- 🔴 **{plan['summary']['destroy']}** resources to destroy\n\n"
+
+                   if plan['summary'].get('resources'):
+                       comment += "### Resources\n"
+                       comment += "| Action | Type | Name |\n"
+                       comment += "|--------|------|------|\n"
+                       for resource in plan['summary']['resources']:
+                           emoji = {'create': '➕', 'update': '♻️', 'delete': '➖'}.get(
+                               resource['action'], '❓'
+                           )
+                           comment += f"| {emoji} {resource['action']} | `{resource['type']}` | `{resource['name']}` |\n"
+           else:
+               comment += "❌ **Plan failed**\n\n"
+               comment += f"```\n{plan.get('errors', 'Unknown error')}\n```\n"
+
+           # Add collapsible raw output
+           comment += "\n<details>\n<summary>View raw terraform plan output</summary>\n\n"
+           comment += f"```hcl\n{plan.get('raw_output', '')[:5000]}\n```\n"
+           comment += "</details>\n"
+
+           return comment
+
+       def _format_helm_dry_run_comment(self, dry_run: Dict) -> str:
+           """Format Helm dry-run as markdown comment"""
+           comment = "## ⎈ Helm Dry-Run Results\n\n"
+
+           # Lint results
+           if dry_run.get('lint'):
+               if dry_run['lint']['passed']:
+                   comment += "✅ **Helm lint passed**\n\n"
+               else:
+                   comment += "⚠️ **Helm lint warnings**\n"
+                   comment += f"```\n{dry_run['lint']['output']}\n```\n\n"
+
+           # Dry-run status
+           if dry_run['status'] == 'success':
+               comment += "✅ **Dry-run successful**\n\n"
+
+               # Show generated manifests summary
+               if dry_run.get('manifests'):
+                   comment += "### Generated Kubernetes Resources\n"
+                   manifest_types = {}
+                   for manifest in dry_run['manifests']:
+                       kind = manifest.get('kind', 'Unknown')
+                       manifest_types[kind] = manifest_types.get(kind, 0) + 1
+
+                   for kind, count in manifest_types.items():
+                       comment += f"- {count} {kind}(s)\n"
+           else:
+               comment += "❌ **Dry-run failed**\n\n"
+               comment += f"```\n{dry_run.get('errors', 'Unknown error')}\n```\n"
+
+           # Add collapsible manifests
+           if dry_run.get('manifests'):
+               comment += "\n<details>\n<summary>View generated manifests</summary>\n\n"
+               comment += "```yaml\n"
+               for manifest in dry_run['manifests'][:10]:  # Limit to first 10
+                   comment += f"---\n{yaml.dump(manifest)}\n"
+               comment += "```\n</details>\n"
+
+           return comment
+
+       def _format_citations_comment(self, citations: List[str]) -> str:
+           """Format KB citations as markdown comment"""
+           comment = "## 📚 Knowledge Base Citations\n\n"
+           comment += "This configuration was generated using the following KB sources:\n\n"
+
+           for citation in citations:
+               comment += f"- {citation}\n"
+
+           comment += "\n*These citations help track the patterns and best practices used in generation.*"
+
+           return comment
+   ```
+
+### Day 10: Testing & Integration
+
+#### Morning (4 hours)
+1. **API Integration Tests**
+   ```python
+   # tests/test_infrastructure_agent.py
+   import pytest
+   from app.agents.infrastructure_agent import InfrastructureAgent
+   from app.core.kb_manager import KnowledgeBaseManager
+
+   @pytest.fixture
+   def infra_agent():
+       kb = KnowledgeBaseManager("./test_chroma")
+       return InfrastructureAgent(kb)
+
+   def test_terraform_generation(infra_agent):
+       """Test Terraform module generation"""
+       result = infra_agent.generate_infrastructure(
+           target="k8s",
+           environments=["staging", "prod"],
+           domain="app.example.com",
+           registry="docker.io/myorg",
+           secrets_strategy="aws-secrets-manager"
+       )
+
+       assert "terraform" in result
+       assert "terraform_plan" in result
+       assert result["terraform_plan"]["status"] in ["success", "failed"]
+       assert len(result["citations"]) > 0
+
+   def test_helm_generation(infra_agent):
+       """Test Helm chart generation"""
+       result = infra_agent.generate_infrastructure(
+           target="k8s",
+           environments=["staging"],
+           domain="app.example.com",
+           registry="docker.io/myorg",
+           secrets_strategy="k8s-secrets"
+       )
+
+       assert "helm" in result
+       assert "helm_dry_run" in result
+       assert result["helm_dry_run"]["status"] in ["success", "failed"]
+
+       # Check for required Helm files
+       helm_files = result["helm"]
+       assert "Chart.yaml" in helm_files
+       assert "values.yaml" in helm_files
+       assert "templates/deployment.yaml" in helm_files
+   ```
+
+2. **E2E Web UI Test**
+   ```typescript
+   // tests/e2e/infrastructure.test.ts
    import { test, expect } from '@playwright/test';
-   
-   test.describe('Onboarding Flow', () => {
-     test('should complete full onboarding process', async ({ page }) => {
-       // Login
-       await page.goto('http://localhost:3000/login');
-       await page.fill('input[name="username"]', 'admin');
-       await page.fill('input[name="password"]', 'password');
-       await page.click('button[type="submit"]');
-       
-       // Navigate to onboarding
-       await page.goto('http://localhost:3000/onboarding');
-       
-       // Step 1: Repository
-       await page.fill('input[name="repoUrl"]', 'https://github.com/test/repo');
+
+   test.describe('Infrastructure Module', () => {
+     test('should generate infrastructure with dry-run', async ({ page }) => {
+       await page.goto('http://localhost:3000/infrastructure');
+
+       // Fill form
        await page.selectOption('select[name="target"]', 'k8s');
        await page.check('input[value="staging"]');
-       await page.check('input[value="production"]');
-       await page.click('button:has-text("Next: Detect Stack")');
-       
-       // Step 2: Stack Detection
-       await page.waitForSelector('text=Detected Technology Stack');
-       await expect(page.locator('text=Node.js')).toBeVisible();
-       await page.click('button:has-text("Next: Configure")');
-       
-       // Step 3: Configuration
-       await page.waitForSelector('text=Configuration Options');
-       await page.click('button:has-text("Next: Preview")');
-       
-       // Step 4: Preview
-       await page.waitForSelector('text=Preview Generated Configuration');
-       await expect(page.locator('.diff-viewer')).toBeVisible();
-       await page.click('button:has-text("Next: Approve")');
-       
-       // Step 5: Approval
-       await page.waitForSelector('text=Ready to Deploy');
-       await page.click('button:has-text("Create PR & Deploy")');
-       
-       // Verify success
-       await expect(page.locator('text=Successfully created PR')).toBeVisible();
+       await page.fill('input[name="domain"]', 'app.example.com');
+       await page.fill('input[name="registry"]', 'docker.io/myorg');
+
+       // Generate
+       await page.click('button:has-text("Generate Infrastructure")');
+
+       // Wait for results
+       await page.waitForSelector('text=Terraform Plan', { timeout: 30000 });
+
+       // Verify terraform plan displayed
+       await expect(page.locator('text=Plan Summary')).toBeVisible();
+
+       // Verify helm dry-run displayed
+       await expect(page.locator('text=Helm Dry-Run Results')).toBeVisible();
+
+       // Create PR
+       await page.click('button:has-text("Create PR with Artifacts")');
+
+       // Verify PR created
+       await page.waitForSelector('text=PR created with dry-run artifacts');
      });
    });
    ```
 
-2. **Performance Optimization**
-   ```typescript
-   // src/utils/performance.ts
-   import { lazy, Suspense } from 'react';
-   
-   // Lazy load heavy components
-   export const LazyOnboardingWizard = lazy(() => 
-     import('../components/onboarding/OnboardingWizard')
-   );
-   
-   export const LazyDeploymentDetails = lazy(() => 
-     import('../components/deployments/DeploymentDetails')
-   );
-   
-   // API response caching
-   export const cacheConfig = {
-     staleTime: 5 * 60 * 1000, // 5 minutes
-     cacheTime: 10 * 60 * 1000, // 10 minutes
-     refetchOnWindowFocus: false,
-   };
-   
-   // Debounce search inputs
-   export function debounce<T extends (...args: any[]) => any>(
-     func: T,
-     wait: number
-   ): (...args: Parameters<T>) => void {
-     let timeout: NodeJS.Timeout;
-     
-     return (...args: Parameters<T>) => {
-       clearTimeout(timeout);
-       timeout = setTimeout(() => func(...args), wait);
-     };
-   }
-   ```
-
 #### Afternoon (4 hours)
-1. **Dashboard Implementation**
-   ```typescript
-   // src/pages/Dashboard.tsx
-   import { useQuery } from '@tanstack/react-query';
-   import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-   import api from '../services/api';
-   
-   export default function Dashboard() {
-     const { data: stats } = useQuery({
-       queryKey: ['dashboard-stats'],
-       queryFn: () => api.get('/dashboard/stats'),
-     });
-     
-     const { data: recentActivity } = useQuery({
-       queryKey: ['recent-activity'],
-       queryFn: () => api.get('/dashboard/activity'),
-     });
-     
-     return (
-       <div className="container mx-auto px-4 py-8">
-         <h1 className="text-2xl font-bold mb-6">Dashboard</h1>
-         
-         <div className="grid grid-cols-4 gap-6 mb-8">
-           <StatCard
-             title="Total Deployments"
-             value={stats?.data?.totalDeployments || 0}
-             change="+12%"
-             trend="up"
-           />
-           <StatCard
-             title="Success Rate"
-             value={`${stats?.data?.successRate || 0}%`}
-             change="+5%"
-             trend="up"
-           />
-           <StatCard
-             title="Active Services"
-             value={stats?.data?.activeServices || 0}
-             change="0"
-             trend="neutral"
-           />
-           <StatCard
-             title="Incidents Today"
-             value={stats?.data?.incidentsToday || 0}
-             change="-2"
-             trend="down"
-           />
-         </div>
-         
-         <div className="grid grid-cols-2 gap-6">
-           <div className="bg-white rounded-lg shadow p-6">
-             <h2 className="text-lg font-medium mb-4">Deployments Over Time</h2>
-             <ResponsiveContainer width="100%" height={300}>
-               <BarChart data={stats?.data?.deploymentHistory || []}>
-                 <CartesianGrid strokeDasharray="3 3" />
-                 <XAxis dataKey="date" />
-                 <YAxis />
-                 <Tooltip />
-                 <Bar dataKey="success" fill="#10b981" />
-                 <Bar dataKey="failed" fill="#ef4444" />
-               </BarChart>
-             </ResponsiveContainer>
-           </div>
-           
-           <div className="bg-white rounded-lg shadow p-6">
-             <h2 className="text-lg font-medium mb-4">Recent Activity</h2>
-             <ul className="space-y-3">
-               {recentActivity?.data?.map((activity) => (
-                 <li key={activity.id} className="flex items-start">
-                   <div className={`w-2 h-2 mt-1.5 rounded-full ${
-                     activity.type === 'deployment' ? 'bg-blue-500' :
-                     activity.type === 'incident' ? 'bg-red-500' :
-                     'bg-gray-500'
-                   }`} />
-                   <div className="ml-3">
-                     <p className="text-sm font-medium">{activity.title}</p>
-                     <p className="text-xs text-gray-500">{activity.timestamp}</p>
-                   </div>
-                 </li>
-               ))}
-             </ul>
-           </div>
-         </div>
-       </div>
-     );
-   }
-   
-   function StatCard({ title, value, change, trend }) {
-     const getTrendColor = () => {
-       if (trend === 'up') return 'text-green-600';
-       if (trend === 'down') return 'text-red-600';
-       return 'text-gray-600';
-     };
-     
-     return (
-       <div className="bg-white rounded-lg shadow p-6">
-         <h3 className="text-sm font-medium text-gray-500">{title}</h3>
-         <div className="mt-2 flex items-baseline">
-           <p className="text-2xl font-semibold">{value}</p>
-           <p className={`ml-2 text-sm ${getTrendColor()}`}>{change}</p>
-         </div>
-       </div>
-     );
-   }
+1. **Docker Compose Update**
+   ```yaml
+   # docker-compose.yml
+   version: '3.8'
+
+   services:
+     backend:
+       build: ./backend
+       ports:
+         - "8000:8000"
+       volumes:
+         - ./chroma_db:/app/chroma_db
+         - ./audit_logs:/app/audit_logs
+         - ./fops.db:/app/fops.db
+       environment:
+         - CHROMA_PERSIST_DIR=/app/chroma_db
+         - AUDIT_LOG_DIR=/app/audit_logs
+         - SQLITE_URL=sqlite:////app/fops.db
+         - MCP_GITHUB_TOKEN=${MCP_GITHUB_TOKEN}
+         - MCP_GITLAB_TOKEN=${MCP_GITLAB_TOKEN}
+       command: uvicorn app.main:app --host 0.0.0.0 --reload
+
+     frontend:
+       build: ./frontend
+       ports:
+         - "3000:3000"
+       environment:
+         - VITE_API_URL=http://localhost:8000
+       command: npm run dev
+
+     terraform:
+       image: hashicorp/terraform:latest
+       volumes:
+         - ./terraform:/workspace
+       working_dir: /workspace
+
+     helm:
+       image: alpine/helm:latest
+       volumes:
+         - ./helm:/apps
+       working_dir: /apps
    ```
 
-2. **Error Handling & Loading States**
-   ```typescript
-   // src/components/common/ErrorBoundary.tsx
-   import { Component, ErrorInfo, ReactNode } from 'react';
-   
-   interface Props {
-     children: ReactNode;
-     fallback?: ReactNode;
-   }
-   
-   interface State {
-     hasError: boolean;
-     error?: Error;
-   }
-   
-   export class ErrorBoundary extends Component<Props, State> {
-     public state: State = {
-       hasError: false,
-     };
-   
-     public static getDerivedStateFromError(error: Error): State {
-       return { hasError: true, error };
-     }
-   
-     public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-       console.error('Uncaught error:', error, errorInfo);
-       // Send to error tracking service
-     }
-   
-     public render() {
-       if (this.state.hasError) {
-         return this.props.fallback || (
-           <div className="min-h-screen flex items-center justify-center">
-             <div className="text-center">
-               <h1 className="text-2xl font-bold text-red-600 mb-4">
-                 Oops! Something went wrong
-               </h1>
-               <p className="text-gray-600 mb-4">
-                 {this.state.error?.message || 'An unexpected error occurred'}
-               </p>
-               <button
-                 onClick={() => window.location.reload()}
-                 className="px-4 py-2 bg-primary-600 text-white rounded-md"
-               >
-                 Reload Page
-               </button>
-             </div>
-           </div>
-         );
-       }
-   
-       return this.props.children;
-     }
-   }
+2. **Documentation**
+   ```markdown
+   # Week 2 Deliverables
+
+   ## Completed Features
+
+   ### Infrastructure Agent
+   - ✅ Terraform module generation for multiple targets (k8s, serverless, static)
+   - ✅ Helm chart generation for Kubernetes deployments
+   - ✅ `terraform plan` execution and validation
+   - ✅ `helm --dry-run` execution and validation
+   - ✅ KB integration with citation generation
+
+   ### Web UI Modules
+   - ✅ Pipeline Agent module with preview and PR creation
+   - ✅ Infrastructure Agent module with dry-run displays
+   - ✅ Citation display for all generated configs
+   - ✅ Responsive design with Tailwind CSS
+
+   ### MCP Servers
+   - ✅ `mcp-terraform`: Typed interface for Terraform operations
+   - ✅ `mcp-helm`: Typed interface for Helm operations
+   - ✅ No raw shell execution - all typed MCP calls
+
+   ### PR/MR Enhancements
+   - ✅ Attach Terraform plan results as PR comments
+   - ✅ Attach Helm dry-run results as PR comments
+   - ✅ Format artifacts as readable markdown
+   - ✅ Include citations in PR description
+
+   ## Success Metrics
+   - Valid Terraform plans generated: 95%+
+   - Helm charts pass dry-run: 100%
+   - PR creation with artifacts: 100%
+   - KB citations per file: 3-5 average
+   - Web UI response time: <2 seconds
+
+   ## Example Output
+
+   ```bash
+   $ fops onboard https://github.com/acme/api --target k8s --env staging --env prod
+
+   🚀 Onboarding repository: https://github.com/acme/api
+      Target: k8s
+      Environments: staging, prod
+
+   ✅ Pipeline generated with 5 KB citations
+   ✅ Infrastructure generated with 7 KB citations
+   📋 Terraform plan: 12 resources to add, 0 to change, 0 to destroy
+   ⎈ Helm dry-run: Passed with 5 Kubernetes resources
+
+   📝 PR created: https://github.com/acme/api/pull/42
+
+   PR contains:
+   - .github/workflows/pipeline.yml (Pipeline Agent)
+   - infra/* (Terraform modules)
+   - deploy/chart/* (Helm chart)
+   - Attached artifacts: terraform plan, helm dry-run results
+   - Citations: [iac:terraform-k8s-001], [iac:helm-best-practices-003], ...
+   ```
    ```
 
-## Deliverables
+## Deliverables for Week 2
 
-### By End of Week 2:
-1. ✅ React frontend with Tailwind CSS
-2. ✅ Authentication and authorization system
-3. ✅ Onboarding wizard with 5 steps
-4. ✅ Deployment management interface
-5. ✅ Live logs with WebSocket
-6. ✅ CI/CD pipeline generation (GitHub Actions, GitLab CI)
-7. ✅ OPA policy enforcement
-8. ✅ Approval workflow system
-9. ✅ Health monitoring dashboard
-10. ✅ Responsive design for all screens
+### Completed Components
+1. ✅ **Infrastructure Agent** generating Terraform + Helm
+2. ✅ `terraform plan` integration with validation
+3. ✅ `helm --dry-run` execution with manifest extraction
+4. ✅ Web UI: Pipeline Agent module
+5. ✅ Web UI: Infrastructure Agent module
+6. ✅ MCP servers: `mcp-terraform`, `mcp-helm`
+7. ✅ PR/MR with attached dry-run artifacts
+8. ✅ Citations for all generated configs
 
-## Success Criteria
+### Success Criteria Met
+- ✅ Valid Terraform plans attached to PRs
+- ✅ Helm charts pass dry-run validation
+- ✅ Web UI generates PRs with complete artifacts
+- ✅ All operations use typed MCP interfaces (no shell)
 
-### Technical Metrics:
-- Page load time < 2 seconds
-- WebSocket connection stability > 99%
-- UI responsiveness < 100ms
-- Browser compatibility (Chrome, Firefox, Safari)
-- Mobile responsive design
-
-### Functional Metrics:
-- Complete onboarding flow works end-to-end
-- Deployments can be triggered and monitored
-- Policies are enforced correctly
-- Approvals workflow functions properly
-- Live logs stream in real-time
-
-## Next Phase Preview
-
-Phase 3 will focus on:
-- Incident management dashboard
-- Advanced knowledge base features
-- Learning path integration
-- Performance optimization
-- Enhanced monitoring
+## Next Week Preview (Week 3)
+- **Monitoring Agent**: Prometheus rules + Grafana dashboards
+- Web UI: Monitoring Agent module
+- Web UI: KB Connect module for documentation ingestion
+- Advanced RAG pipeline with relevance scoring

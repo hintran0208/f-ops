@@ -1,144 +1,132 @@
-# F-Ops (DevOps AI Agent) — Implementation Plan (Python + Chroma)
+# F-Ops — Three-Agent Plan (Python + Chroma) — CLI + Web UI
 
-**Phase focus:** Implement **CLI** and **Web UI** first. Slack/Teams, VS Code/Copilot, and Claude Code MCP will follow after MVP.
-
----
-
-## 1) Objectives (Phase 1 = CLI + Web UI)
-
-- **Zero-to-Deploy** for brand-new repos via CLI & Web UI wizard.
-- **Operate Safely**: CI/CD orchestration, dry-run by default, approvals in Web UI.
-- **Knowledge-Driven**: Chroma vector KB for pipelines/runbooks; plans cite sources.
-- **Guardrails**: OPA policy checks, two-key approvals, immutable audit.
+> **Purpose:** A local-first DevOps assistant exposed through **CLI** and **Web UI**.  
+> **Agents:** **Pipeline Agent**, **Infrastructure Agent**, **Monitoring Agent**.  
+> **Tooling Interface:** custom **MCP server packs** (GitHub/GitLab/Jenkins/Kubernetes/Terraform/Helm/Observability/KB). MCP is our “USB-C” for tools so the same skills work across all surfaces (CLI, Web UI, Slack/Teams, VS Code, Claude Code).
 
 ---
 
-## 2) Scope & Features (Phase 1)
+## 1) Scope & Boundaries
 
-### A) CLI (Python Typer)
-
-- `fops onboard --repo <url> --target k8s|serverless|static --env staging,prod`
-- `fops deploy --service <name> --env <env> --approve`
-- `fops incident --service <name>` (summarize logs/metrics; propose actions)
-- `fops kb connect --uri <link>` and `fops kb search "<query>"`
-- Global flags: `--dry-run`, `--no-apply`, `--policy=<file.rego>`
-
-### B) Web UI (FastAPI backend + React/Tailwind frontend)
-
-- **Onboarding Wizard**: repo URL → detect stack → options → preview PR diffs (CI/CD, IaC/Helm, policies) → **Approve**.
-- **Deployments**: service listing, “Deploy now”, live logs, health/SLO status, **Approve** buttons.
-- **Incidents**: alert list → RCA view (metrics/logs) → proposed fix actions → approval & execution.
-- **Knowledge Base**: “Connect Source” (paste link), KB search with snippet preview & citations, “Apply as pipeline”.
-- **Audit & Policy**: timeline of actions; policy viewer (active OPA rules).
+- **CLI**: supports **onboarding** and **knowledge** commands.
+  - `fops onboard --repo <url> --target k8s|serverless|static --env staging,prod` → **Pipeline + Infrastructure** Agents collaborate to generate CI/CD + IaC artifacts and open a **PR/MR**; run **dry-runs** where supported (e.g., `terraform plan`, `helm --dry-run`) and attach results for review.
+  - `fops kb connect --uri <link>` / `fops kb search "<q>"` → Knowledge ingestion/search in **Chroma**.
+- **Web UI**: provides four modules
+  - **Pipeline Agent** (generate/preview CI/CD)
+  - **Infrastructure Agent** (generate/preview IaC/Helm)
+  - **Monitoring Agent** (generate/preview telemetry configs)
+  - **KB Connect** (crawl links → embed into Chroma)
 
 ---
 
-## 3) Architecture (no Postgres)
+## 2) Agents & Outputs
 
-- **Agent Core (FastAPI)**: planning (LangGraph/LangChain), policy checks (OPA), approvals, event/webhook handlers.
-- **MCP Packs (local)**: `mcp-github`, `mcp-gitlab`, `mcp-jenkins`, `mcp-kubernetes`, `mcp-aws`, `mcp-observability`, `mcp-kb`.
-- **Knowledge Layer**: **Chroma** (persistent) for embeddings/semantic search; collections per tenant/project.
-- **State & Audit**: **SQLite** (approvals, runs, incidents), **JSONL** append-only audit logs.
-- **Observability**: Prometheus/Grafana APIs, optional ELK; OpenTelemetry for agent traces.
-- **Security**: OPA guardrails, least-privilege credentials, tenant scoping (per-collection), signed webhooks.
+### A) Pipeline Agent
 
----
+**Goal:** Provide CI/CD pipelines for **new or existing projects without deployments**.  
+**Inputs:** repo URL, stack, target (k8s/serverless/static), environments, org standards.  
+**Process:**
 
-## 4) Tech Stack
+1. Detect stack (lang, Dockerfile, frameworks).
+2. Retrieve similar pipelines/templates from **Chroma** (KB).
+3. Compose pipeline (GitHub Actions/GitLab CI/Jenkinsfile) with **security/scans + SLO gates**; cite sources.
+4. Open **PR/MR** with `.github/workflows/*.yml` or `.gitlab-ci.yml` (validated syntax).  
+   **Output:** A reviewable PR/MR containing CI/CD files + a short plan & citations.
 
-- **Python 3.11+**, **FastAPI**, **Uvicorn**
-- **LangGraph/LangChain** for tool orchestration
-- **Chroma** for vector search; **SQLite** + **JSONL** for state/audit
-- **Terraform**, **Helm**, **Kubernetes Python client**
-- **Prometheus/Grafana** HTTP APIs; **OPA (rego)**
-- **React + Tailwind** (Web UI), **Typer** (CLI)
-- Packaging: Docker images per MCP & agent; PyPI pkg for CLI
+### B) Infrastructure Agent
 
----
+**Goal:** Provide baseline infrastructure & deployment configs to support that pipeline.  
+**Inputs:** target (k8s/serverless/static), envs, domain, registry, secrets strategy.  
+**Process:**
 
-## 5) Knowledge & Planning (Phase 1)
+1. Propose **Terraform** modules (networking, registry, DNS/secrets) and **Helm** chart skeleton (if k8s).
+2. Generate IaC + Helm values; run **`terraform plan`** and **`helm --dry-run`**; attach outputs.
+3. Open **PR/MR** with `infra/*` and `deploy/chart/*`.  
+   **Output:** A reviewable PR/MR with IaC/Helm + plan/dry-run artifacts.
 
-- **Chroma collections**: `kb.docs`, `kb.pipelines`, `kb.iac`, `kb.incidents`, `kb.slo`.
-- **Connectors**: `kb.connect(uri)` → crawl → clean → chunk → embed; `kb.sync` via webhook/poll.
-- **RAG planner**: detect context (stack/env/intent) → query top-K → **merge** retrieved pipeline/IaC steps into a plan → OPA validate → dry-run → create PR with **citations**.
+### C) Monitoring Agent
 
----
+**Goal:** Provide observability scaffolding (metrics/dashboards/alerts) aligned to the new service.  
+**Inputs:** service name, env, SLO targets, stack.  
+**Process:**
 
-## 6) Development Roadmap (front-loaded on CLI + Web UI)
-
-**Week 1 — Core & KB**
-
-- FastAPI skeleton; Chroma client; `kb.connect/search`; JSONL audit; SQLite approvals/runs.
-- MCP: GitHub + Kubernetes; **Zero-to-Deploy** scaffold generator (CI/CD, Helm/Terraform, policy files).
-- CLI: `onboard`, `kb connect/search`.
-
-**Week 2 — Web UI MVP & Deploy Flow**
-
-- Web UI: auth, Onboarding Wizard, PR preview (diffs), Approve → dry-run deploy to **staging**; Deployments page (live logs).
-- CLI: `deploy`, `incident` (summary + suggested actions).
-- OPA policy hooks (deny destructive ops; require approval).
-
-**Week 3 — Incidents, KB polish, Approvals UX**
-
-- Web UI: Incident dashboard (RCA view, action proposals, approval buttons), KB search/preview, “Apply as pipeline”.
-- Observability MCP (Prometheus/Grafana) for metrics queries.
-- RAG planner v1 (citations in PR); service/env filters.
-
-**Week 4 — Hardening & Demo Readiness**
-
-- Multi-tenant collections; token scoping; signed webhooks.
-- Evaluation harness (retrieval hit-rate, plan quality, dry-run success).
-- Docs: Quickstart (CLI/Web), security policy templates, demo scripts.
-
-> **Post-MVP (later):** Slack/Teams bot, VS Code extension + Copilot prompts, Claude Code MCP wiring, GitLab/Jenkins/AWS breadth.
+1. Emit **Prometheus rules** (recording/alerting) and **Grafana** provisioning files; cite KB examples.
+2. Open **PR/MR** under `observability/` (provisioning YAML + dashboard JSON).  
+   **Output:** Reviewable monitoring configs.
 
 ---
 
-## 7) APIs & CLI↔Web parity (examples)
+## 3) Knowledge Base (Chroma) & Connectors
 
-- **Onboard**:
-  - CLI: `fops onboard --repo https://github.com/acme/app --target k8s --env staging,prod`
-  - Web: Wizard form → Preview diffs → **Approve** → PR + dry-run → staging live.
-- **Deploy**:
-  - CLI: `fops deploy --service app --env staging --approve`
-  - Web: Service → **Deploy now** → live logs → health/SLO check.
-- **Incident**:
-  - CLI: `fops incident --service api-gw`
-  - Web: Click incident → RCA + actions → **Approve rollback/restart/scale**.
-- **Knowledge**:
-  - CLI: `fops kb connect --uri <confluence|notion|repo>`; `fops kb search "python helm canary"`
-  - Web: “Connect Source” wizard; KB search with citations; **Apply as pipeline**.
+- **Chroma collections:** `kb.pipelines`, `kb.iac`, `kb.docs/runbooks`, `kb.slo`, `kb.incidents` (text + embeddings + tags).
+- **Connectors:** `kb.connect(uri)` crawls GitHub/Confluence/Notion/Docs; cleans, chunks, embeds; `kb.sync` refreshes on webhook/poll.
+- **RAG planning:** Agents query top-K relevant snippets, **merge** into proposed CI/CD/IaC/observability templates, and **cite sources** in PRs.
+- **Safety:** all plans are **proposal-only**; no apply/execute from CLI/Web UI.
 
 ---
 
-## 8) Security & Governance
+## 4) MCP Server Packs (local)
 
-- **OPA guardrails**: change windows, RBAC roles, two-key approvals for prod.
-- **Isolation**: per-tenant Chroma collections; credential scoping per MCP pack.
-- **Audit**: JSONL timeline + Web UI viewer; export bundle (actions, diffs, approvals, SLO checks).
+A single pack that exposes multiple custom MCP servers/namespaces:
 
----
-
-## 9) Success Metrics (Phase 1)
-
-- **Onboarding time**: new repo → staging live **< 30 minutes**.
-- **Adoption**: % actions executed from **Web UI** vs CLI (target ≥50% via Web UI).
-- **CI/CD health**: dry-run pass rate ≥90%; deploy failure CFR <15%.
-- **Incident response**: MTTR **< 1h** for supported classes; ≥60% actions approved from Web UI.
+- **SCM & CI:** `mcp-github`, `mcp-gitlab`, `mcp-jenkins` — open PR/MR, comment, fetch logs.
+- **Infra & Cluster:** `mcp-terraform`, `mcp-kubernetes`, `mcp-helm` — produce plans/dry-runs and diffs.
+- **Observability:** `mcp-observability` — generate Prometheus rule files & Grafana provisioning; optionally validate syntax.
+- **Knowledge:** `mcp-kb` — `connect`, `sync`, `search`, `compose`.
 
 ---
 
-## 10) Deliverables (Phase 1)
+## 5) Architecture (Python + Chroma, no Postgres)
 
-- **CLI package (PyPI)** with onboard/deploy/incident/KB commands.
-- **Web UI** (FastAPI backend + React/Tailwind) with Onboarding, Deployments, Incidents, KB, Approvals, Audit.
-- **Agent Core** (FastAPI service) + **MCP packs** (GitHub, Kubernetes, Observability, KB).
-- **Chroma KB** persistence + ingestion scripts.
-- **SQLite schema + JSONL audit** utilities.
-- **Docs**: Quickstart (CLI/Web), security policy templates, demo scenarios.
+- **Agent Core (FastAPI):** planning (LangGraph/LangChain), policy checks (OPA), PR orchestration, event/webhook receivers.
+- **State & Audit:** SQLite for minimal state (approvals index, run metadata), JSONL for immutable audit.
+- **Security:** OPA guardrails, allow-listed repos/namespaces, scoped tokens per MCP; avoid running arbitrary shell via agent—prefer typed MCP calls.
+- **Observability:** Prometheus/Grafana APIs used only for **template validation**.
+
+---
+
+## 6) Web UI Modules
+
+- **Pipeline Agent:** form → repo URL, target, envs → preview generated CI/CD files → open PR/MR.
+- **Infrastructure Agent:** form → cloud/K8s settings → preview Terraform/Helm + **plan/dry-run** outputs → open PR/MR.
+- **Monitoring Agent:** form → SLO targets/stack → preview Prometheus/Grafana provisioning → open PR/MR.
+- **KB Connect:** paste links → crawl & embed into Chroma; search/preview indexed items.
+
+---
+
+## 7) CLI Commands
+
+- `fops onboard …` — **enabled** (proposal + PR; with Terraform/Helm dry-run artifacts).
+- `fops kb connect …` / `fops kb search …` — **enabled**.
+
+---
+
+## 8) Delivery Timeline (4 weeks)
+
+- **Week 1** — FastAPI core; Chroma client; `mcp-kb` (connect/search); **Pipeline Agent** GitHub/GitLab scaffolds; JSONL audit; SQLite minimal state.
+- **Week 2** — **Infrastructure Agent** (Terraform plan; Helm `--dry-run`); Web UI module for Pipeline+Infra previews & PRs.
+- **Week 3** — **Monitoring Agent** (Prometheus rules + Grafana provisioning); Web UI monitoring module; KB Connect module.
+- **Week 4** — OPA guardrails; multi-tenant Chroma collections; evaluation harness (retrieval hit-rate, plan quality, syntax validation); docs/demo.
+
+---
+
+## 9) Success Criteria
+
+- **Onboarding speed:** new repo → PR with CI/CD + IaC + monitoring in **≤ 30 min**.
+- **Reviewability:** 100% changes land as **PR/MR** with **plan/dry-run** artifacts attached.
+- **KB utility:** ≥ 80% of generated files include **citations** to KB sources/snippets.
+- **Adoption:** ≥ 50% usage via Web UI modules after Week-3.
+
+---
+
+## 10) Risks & Mitigations
+
+- **Config drift or unsafe ops** → strictly plan/preview/PR-only; no apply.
+- **MCP security posture** → scoped creds, allow-lists, no raw shell; central policies; rotate tokens.
+- **Pipeline portability** → rely on official provider syntax refs (GitHub Actions/GitLab CI).
 
 ---
 
 ### Bottom Line
 
-We will **ship CLI and Web UI first** with a Python + Chroma core, delivering zero-to-deploy onboarding, safe deployments with approvals, incident triage, and a searchable knowledge base. The same planning and policy engine powers both surfaces; additional surfaces (Slack/Teams, VS Code/Copilot, Claude Code MCP) can plug in later without changing the core.
+F-Ops centers on **design-time generation and review**: the three agents produce **high-quality PRs** for **Pipelines**, **Infrastructure**, and **Monitoring**, and the **KB Connect** module keeps knowledge fresh in **Chroma**. CLI and Web UI expose only onboarding and knowledge flows—keeping everything proposal-first, reviewable, and safe.

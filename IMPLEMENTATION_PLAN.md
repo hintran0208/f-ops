@@ -1,243 +1,279 @@
-# F-Ops DevOps AI Agent - Master Implementation Plan
+# F-Ops — Master Implementation Plan
 
 ## Overview
-F-Ops is an enterprise-grade DevOps AI Agent that combines intelligent automation, knowledge-driven operations, and safe deployment practices. This implementation plan integrates features from both the original F-Ops design and the devops-ai-guidelines repository.
+F-Ops is a local-first DevOps assistant that generates **proposal-only** CI/CD pipelines, infrastructure configs, and monitoring setups through intelligent agents. All operations result in reviewable PR/MRs with dry-run artifacts - no direct execution.
 
 ## Vision
-Transform DevOps operations through AI-powered automation while maintaining security, compliance, and human oversight. Enable teams to achieve zero-to-deploy for new repositories in under 30 minutes with enterprise-grade safety and governance.
+Enable teams to achieve zero-to-deploy readiness for new repositories in **≤ 30 minutes** through AI-powered generation of CI/CD, IaC, and observability configs - all delivered as reviewable pull requests with validation artifacts.
 
-## Core Features Integration
+## Core Architecture
 
-### From Original F-Ops Plan:
-- Zero-to-Deploy automation
-- CLI and Web UI interfaces
-- Knowledge-driven operations with Chroma
-- OPA policy enforcement
-- Multi-environment deployment
-- Incident response automation
-- Audit and compliance tracking
+### Three-Agent System
+1. **Pipeline Agent**: CI/CD pipeline generation with security scans and SLO gates
+2. **Infrastructure Agent**: Terraform modules and Helm charts with plan/dry-run outputs
+3. **Monitoring Agent**: Prometheus rules and Grafana dashboards for observability
 
-### From DevOps-AI-Guidelines:
-- AI-assisted infrastructure creation
-- Prompt engineering templates for DevOps
-- Cloud optimization strategies
-- Microservice architecture patterns
-- Learning path integration
-- Career development features
-- AWS certification assistance
-- Interview preparation tools
+### Interfaces
+- **CLI**: Onboarding and knowledge management commands
+- **Web UI**: Four modules for agent interactions and KB management
+- **MCP Server Packs**: Tool integration layer (GitHub/GitLab/Jenkins/K8s/Terraform/Helm/Observability/KB)
 
-## Architecture Overview
+## System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         User Interfaces                       │
-├──────────────┬──────────────┬──────────────┬────────────────┤
-│     CLI      │   Web UI     │  Slack/Teams │  VS Code/MCP   │
-│   (Typer)    │(React+FastAPI)│   (Phase 2) │   (Phase 3)    │
-└──────────────┴──────────────┴──────────────┴────────────────┘
+│                    User Interfaces                           │
+├─────────────────────────┬────────────────────────────────────┤
+│         CLI             │            Web UI                  │
+│   (Typer/Click)         │      (React + FastAPI)            │
+│                         │                                    │
+│  • fops onboard         │  Modules:                         │
+│  • fops kb connect      │  • Pipeline Agent                 │
+│  • fops kb search       │  • Infrastructure Agent           │
+│                         │  • Monitoring Agent               │
+│                         │  • KB Connect                     │
+└─────────────────────────┴────────────────────────────────────┘
                                │
-┌─────────────────────────────────────────────────────────────┐
-│                      Agent Core (FastAPI)                     │
-├───────────────────────────────────────────────────────────────┤
-│  • LangGraph/LangChain Orchestration                         │
-│  • Prompt Engineering Engine                                 │
-│  • Policy Enforcement (OPA)                                  │
-│  • Learning Path Manager                                     │
-│  • Career Development Tracker                                │
-└───────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                   Agent Core (FastAPI)                       │
+├──────────────────────────────────────────────────────────────┤
+│  • Planning Engine (LangGraph/LangChain)                     │
+│  • RAG Pipeline (Chroma integration)                         │
+│  • Policy Enforcement (OPA guardrails)                       │
+│  • PR/MR Orchestration                                       │
+│  • Dry-run Execution & Validation                           │
+│  • Citation Generation                                       │
+└──────────────────────────────────────────────────────────────┘
                                │
-┌─────────────────────────────────────────────────────────────┐
-│                         MCP Packs                             │
-├──────────────┬──────────────┬──────────────┬────────────────┤
-│   GitHub/    │  Kubernetes/ │ Observability│   Knowledge    │
-│   GitLab     │     AWS      │ (Prometheus) │      Base      │
-├──────────────┼──────────────┼──────────────┼────────────────┤
-│   Jenkins    │  Terraform/  │    Security  │    Learning    │
-│              │     Helm     │     (OPA)    │     Path       │
-└──────────────┴──────────────┴──────────────┴────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      MCP Server Packs                        │
+├────────────────┬────────────────┬────────────────────────────┤
+│   SCM & CI     │   Infra & K8s   │   Observability & KB      │
+├────────────────┼────────────────┼────────────────────────────┤
+│ • mcp-github   │ • mcp-terraform │ • mcp-observability       │
+│ • mcp-gitlab   │ • mcp-kubernetes│ • mcp-kb                  │
+│ • mcp-jenkins  │ • mcp-helm      │   - connect               │
+│                │                 │   - sync                  │
+│                │                 │   - search                │
+│                │                 │   - compose               │
+└────────────────┴────────────────┴────────────────────────────┘
                                │
-┌─────────────────────────────────────────────────────────────┐
-│                      Data & Storage Layer                     │
-├──────────────┬──────────────┬──────────────┬────────────────┤
-│   Chroma     │   SQLite     │    JSONL     │   File System  │
-│  (Vectors)   │   (State)    │   (Audit)    │   (Configs)    │
-└──────────────┴──────────────┴──────────────┴────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    Data & Storage Layer                      │
+├────────────────┬────────────────┬────────────────────────────┤
+│    Chroma      │     SQLite      │         JSONL             │
+│  (Embeddings)  │ (Minimal State) │   (Immutable Audit)       │
+│                │                 │                           │
+│ Collections:   │ • Approvals     │ • All operations         │
+│ • kb.pipelines │ • Run metadata  │ • Agent decisions        │
+│ • kb.iac       │ • Session state │ • Citations              │
+│ • kb.docs      │                 │ • Dry-run results        │
+│ • kb.slo       │                 │                           │
+│ • kb.incidents │                 │                           │
+└────────────────┴────────────────┴────────────────────────────┘
 ```
 
-## Implementation Phases
+## 4-Week Delivery Timeline
 
-### Phase 1: Core & Knowledge Base (Week 1)
-- Core infrastructure setup
-- Knowledge base implementation with Chroma
-- Basic CLI commands
-- MCP pack foundations
-- Prompt engineering templates
+### Week 1: Core Foundation & Pipeline Agent
+**Goal**: FastAPI core, Chroma integration, Pipeline Agent MVP
 
-### Phase 2: Web UI & Deployment (Week 2)
-- Web UI MVP with onboarding wizard
-- Deployment workflows
-- CI/CD integration
-- OPA policy enforcement
-- AI-assisted infrastructure creation
+**Deliverables**:
+- FastAPI application structure with agent orchestration
+- Chroma client and KB collections setup
+- `mcp-kb` implementation (connect/search functionality)
+- **Pipeline Agent**: GitHub/GitLab CI/CD generation
+- CLI commands: `fops onboard` (basic), `fops kb connect/search`
+- JSONL audit logging system
+- SQLite for minimal state management
 
-### Phase 3: Incidents & Advanced KB (Week 3)
-- Incident management dashboard
-- Advanced knowledge features
-- Learning path integration
-- Observability integration
-- Career development features
+**Success Criteria**:
+- Generate valid GitHub Actions/GitLab CI pipelines
+- KB search returns relevant snippets with citations
+- Audit trail captures all operations
 
-### Phase 4: Hardening & Enterprise (Week 4)
-- Multi-tenancy support
-- Security hardening
-- Performance optimization
-- Documentation and training
-- Enterprise features
+### Week 2: Infrastructure Agent & Web UI
+**Goal**: IaC generation with validation, Web UI for Pipeline+Infrastructure
 
-### Phase 5: Advanced AI Features (Post-MVP)
-- Slack/Teams integration
-- VS Code extension
-- Claude Code MCP
-- Advanced prompt engineering
-- AWS certification assistant
+**Deliverables**:
+- **Infrastructure Agent**: Terraform modules + Helm charts
+- `terraform plan` integration for validation
+- `helm --dry-run` execution and output capture
+- Web UI: Pipeline Agent module (preview & PR generation)
+- Web UI: Infrastructure Agent module (preview with plan outputs)
+- PR/MR creation with attached dry-run artifacts
+- `mcp-terraform` and `mcp-helm` implementations
+
+**Success Criteria**:
+- Valid Terraform plans generated and attached to PRs
+- Helm charts pass dry-run validation
+- Web UI generates PRs with complete artifacts
+
+### Week 3: Monitoring Agent & KB Connect
+**Goal**: Complete observability configs, full KB management
+
+**Deliverables**:
+- **Monitoring Agent**: Prometheus rules + Grafana provisioning
+- Web UI: Monitoring Agent module
+- Web UI: KB Connect module (crawl, embed, search)
+- `mcp-observability` implementation
+- KB connectors for GitHub/Confluence/Notion
+- Citation system for all generated configs
+- Advanced RAG pipeline with relevance scoring
+
+**Success Criteria**:
+- Valid Prometheus/Grafana configs with syntax validation
+- ≥80% of generated files include KB citations
+- KB Connect successfully ingests external documentation
+
+### Week 4: Guardrails & Enterprise Readiness
+**Goal**: Security, multi-tenancy, evaluation, documentation
+
+**Deliverables**:
+- OPA policy guardrails implementation
+- Multi-tenant Chroma collections with isolation
+- Scoped MCP tokens and credential rotation
+- Evaluation harness:
+  - Retrieval hit-rate metrics
+  - Plan quality scoring
+  - Syntax validation suite
+- Complete documentation and demo materials
+- Performance optimization (target: <30min onboarding)
+
+**Success Criteria**:
+- All operations pass OPA policy checks
+- 100% of changes delivered as reviewable PR/MRs
+- Complete zero-to-deploy in ≤30 minutes
+- ≥50% adoption via Web UI after launch
 
 ## Tech Stack
 
-### Core Technologies
-- **Language**: Python 3.11+ (with Golang for performance-critical components)
+### Core
+- **Language**: Python 3.11+
 - **Framework**: FastAPI + Uvicorn
-- **AI/ML**: LangGraph, LangChain, OpenAI/Claude APIs
-- **Vector DB**: Chroma
-- **State DB**: SQLite
-- **Audit**: JSONL
-- **Policy**: OPA (Open Policy Agent)
+- **AI/ML**: LangGraph, LangChain
+- **Vector DB**: Chroma (no Postgres)
+- **State**: SQLite (minimal)
+- **Audit**: JSONL (immutable)
+- **Policy**: OPA
 
 ### Frontend
 - **Framework**: React 18+
 - **Styling**: Tailwind CSS
-- **State Management**: Redux Toolkit
-- **Build Tool**: Vite
+- **State**: Redux Toolkit or Zustand
+- **Build**: Vite
 
-### Infrastructure
-- **Container**: Docker
-- **Orchestration**: Kubernetes
-- **IaC**: Terraform
-- **Package Management**: Helm
-- **CI/CD**: GitHub Actions / GitLab CI
+### MCP Integration
+- Custom MCP server implementations
+- Typed interfaces for all tools
+- No raw shell execution - only typed MCP calls
 
-### Observability
-- **Metrics**: Prometheus
-- **Visualization**: Grafana
-- **Tracing**: OpenTelemetry
-- **Logging**: ELK Stack (optional)
+## Key Design Principles
 
-## Key Differentiators
+### 1. Proposal-Only Operations
+- All outputs are PR/MRs for review
+- No direct apply/execute/deploy
+- Dry-run validations attached as artifacts
+- Human approval required for all changes
 
-### 1. AI-Powered Prompt Engineering
-- Pre-built prompt templates for common DevOps tasks
-- Context-aware prompt generation
-- Learning from successful patterns
-- Performance optimization prompts
+### 2. Knowledge-Driven Generation
+- RAG pipeline queries Chroma for patterns
+- All generated configs cite KB sources
+- Continuous KB updates via connectors
+- Semantic search for relevant examples
 
-### 2. Knowledge-Driven Operations
-- Semantic search across documentation
-- RAG-based planning with citations
-- Continuous learning from incidents
-- Best practices enforcement
+### 3. Safety & Compliance
+- OPA policy enforcement on all operations
+- Allow-listed repos and namespaces
+- Scoped credentials per MCP server
+- Immutable audit trail in JSONL
 
-### 3. Safe-by-Default
-- Dry-run everything first
-- Two-key approval for production
-- OPA policy enforcement
-- Immutable audit trail
+### 4. Local-First Architecture
+- No external service dependencies for core ops
+- MCP servers run locally
+- Chroma runs locally
+- SQLite for state (no Postgres)
 
-### 4. Career Development Integration
-- Track skill progression
-- Suggest learning paths
-- Interview preparation
-- Certification assistance
+## Agent Specifications
 
-### 5. Enterprise Features
-- Multi-tenancy support
-- RBAC with fine-grained permissions
-- Compliance reporting
-- Cost optimization recommendations
+### Pipeline Agent
+**Inputs**: repo URL, stack, target, environments
+**Process**:
+1. Stack detection (language, frameworks)
+2. KB retrieval of similar pipelines
+3. Pipeline composition with security/SLO gates
+4. Citation generation from KB sources
+5. PR/MR creation with validated YAML
+
+**Outputs**: `.github/workflows/*.yml` or `.gitlab-ci.yml`
+
+### Infrastructure Agent
+**Inputs**: target (k8s/serverless/static), environments, domain
+**Process**:
+1. Terraform module selection
+2. Helm chart skeleton (if k8s)
+3. Configuration generation
+4. `terraform plan` execution
+5. `helm --dry-run` validation
+6. PR/MR with plan artifacts
+
+**Outputs**: `infra/*` and `deploy/chart/*` with validation results
+
+### Monitoring Agent
+**Inputs**: service name, SLO targets, stack
+**Process**:
+1. Prometheus rule generation
+2. Grafana dashboard creation
+3. KB pattern matching
+4. Syntax validation
+5. PR/MR with provisioning files
+
+**Outputs**: `observability/*` configs with citations
 
 ## Success Metrics
 
-### Phase 1-2 (MVP)
-- Onboarding time: < 30 minutes
-- CLI command coverage: 80%
-- Web UI feature parity: 70%
-- Knowledge base accuracy: 85%
+### Delivery Metrics
+- **Onboarding Speed**: New repo → PR in ≤30 minutes
+- **Review Quality**: 100% PRs include dry-run artifacts
+- **KB Utilization**: ≥80% configs include citations
+- **UI Adoption**: ≥50% usage via Web UI by Week 3
 
-### Phase 3-4 (Production)
-- Deployment success rate: > 95%
-- Incident MTTR: < 1 hour
-- Policy compliance: 100%
-- User adoption: > 50% via Web UI
-
-### Phase 5 (Scale)
-- Multi-channel support: 4 interfaces
-- Enterprise deployments: 10+
-- Knowledge base items: 1000+
-- Prompt templates: 100+
+### Quality Metrics
+- **Syntax Validity**: 100% generated configs parse correctly
+- **Plan Success**: ≥95% Terraform plans execute successfully
+- **Helm Validation**: 100% charts pass dry-run
+- **Citation Coverage**: ≥3 KB citations per generated file
 
 ## Risk Mitigation
 
 ### Technical Risks
-- **AI Hallucination**: Implement validation layers and human approval
-- **Performance**: Use caching, optimize prompts, implement rate limiting
-- **Security**: Encrypt sensitive data, implement least privilege, audit everything
+- **Config Drift**: Proposal-only prevents drift
+- **Invalid Configs**: Dry-run validation before PR
+- **KB Quality**: Continuous validation and curation
+- **Performance**: Caching and optimization for <30min target
 
-### Operational Risks
-- **Adoption**: Provide extensive documentation and training
-- **Integration**: Support gradual rollout with existing tools
-- **Compliance**: Built-in policy templates and audit reports
+### Security Risks
+- **Credential Exposure**: Scoped tokens, rotation policies
+- **Unauthorized Access**: Allow-lists, OPA policies
+- **Audit Gaps**: Immutable JSONL for all operations
+- **Shell Injection**: No raw shell - only typed MCP calls
 
 ## Next Steps
 
-1. Review and approve this master plan
-2. Begin Phase 1 implementation (PHASE_1_CORE_KB.md)
-3. Set up development environment
-4. Create initial project structure
-5. Implement core components
+1. **Immediate** (Day 1-2):
+   - Set up project structure
+   - Initialize FastAPI application
+   - Configure Chroma database
+   - Implement basic MCP server framework
 
-## Appendix
+2. **Week 1 Sprint**:
+   - Complete Pipeline Agent
+   - Implement KB connect/search
+   - Basic CLI commands
+   - JSONL audit system
 
-### A. Prompt Template Categories
-1. Infrastructure provisioning
-2. Deployment automation
-3. Incident response
-4. Performance optimization
-5. Security scanning
-6. Documentation generation
-7. Code review
-8. Testing strategies
-9. Migration planning
-10. Cost optimization
-
-### B. Learning Path Topics
-1. AI fundamentals for DevOps
-2. Prompt engineering basics
-3. LangChain development
-4. Kubernetes with AI
-5. Cloud optimization
-6. Security best practices
-7. Observability strategies
-8. GitOps workflows
-9. Infrastructure as Code
-10. Career development
-
-### C. Integration Points
-1. GitHub/GitLab webhooks
-2. Kubernetes API
-3. AWS/Azure/GCP APIs
-4. Prometheus metrics
-5. Grafana dashboards
-6. OPA decision logs
-7. Slack/Teams APIs
-8. VS Code extensions
-9. Claude/OpenAI APIs
-10. Jenkins/CircleCI pipelines
+3. **Ongoing**:
+   - Daily progress tracking against timeline
+   - Weekly demos of completed features
+   - Continuous documentation updates
+   - Regular security reviews

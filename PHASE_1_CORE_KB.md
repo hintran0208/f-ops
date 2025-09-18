@@ -1,15 +1,19 @@
-# Phase 1: Core & Knowledge Base Implementation
+# Week 1: Core Foundation & Pipeline Agent
 
 ## Duration: Week 1 (5 days)
 
 ## Objectives
-- Set up core infrastructure and FastAPI backend
+- Set up FastAPI core with agent orchestration
 - Implement Chroma vector database for knowledge management
-- Create basic CLI with essential commands
-- Establish MCP pack foundations
-- Integrate prompt engineering templates
+- Build **Pipeline Agent** for CI/CD generation
+- Create CLI with `fops onboard` and `fops kb` commands
+- Implement `mcp-kb` for knowledge operations
+- Establish JSONL audit logging and SQLite state management
 
-## Day-by-Day Breakdown
+## Architecture Focus
+Building the foundation for **proposal-only** operations where all agent outputs are PR/MRs with dry-run artifacts attached for review.
+
+## Day-by-Day Implementation
 
 ### Day 1: Project Setup & Core Infrastructure
 
@@ -22,16 +26,22 @@
    │   │   ├── __init__.py
    │   │   ├── main.py
    │   │   ├── config.py
+   │   │   ├── agents/
+   │   │   │   ├── pipeline_agent.py
+   │   │   │   ├── infrastructure_agent.py  # (Week 2)
+   │   │   │   └── monitoring_agent.py      # (Week 3)
    │   │   ├── core/
-   │   │   │   ├── agent.py
-   │   │   │   ├── planner.py
-   │   │   │   └── executor.py
+   │   │   │   ├── kb_manager.py
+   │   │   │   ├── pr_orchestrator.py
+   │   │   │   └── citation_engine.py
+   │   │   ├── mcp_servers/
+   │   │   │   ├── mcp_kb.py
+   │   │   │   ├── mcp_github.py
+   │   │   │   └── mcp_gitlab.py
    │   │   ├── api/
-   │   │   │   ├── routes/
-   │   │   │   └── dependencies.py
+   │   │   │   └── routes/
    │   │   ├── models/
-   │   │   ├── schemas/
-   │   │   └── utils/
+   │   │   └── schemas/
    │   ├── requirements.txt
    │   └── Dockerfile
    ├── cli/
@@ -39,23 +49,16 @@
    │   │   ├── __init__.py
    │   │   ├── cli.py
    │   │   ├── commands/
-   │   │   └── utils/
-   │   ├── setup.py
+   │   │   │   ├── onboard.py
+   │   │   │   └── kb.py
    │   └── requirements.txt
-   ├── mcp_packs/
-   │   ├── github/
-   │   ├── kubernetes/
-   │   └── base/
-   ├── knowledge_base/
-   │   ├── connectors/
-   │   ├── templates/
-   │   └── prompts/
-   ├── tests/
+   ├── audit_logs/
+   ├── chroma_db/
    ├── docker-compose.yml
    └── .env.example
    ```
 
-2. **Dependencies Installation**
+2. **Core Dependencies**
    ```python
    # backend/requirements.txt
    fastapi==0.104.0
@@ -65,41 +68,37 @@
    chromadb==0.4.15
    sqlalchemy==2.0.23
    pydantic==2.5.0
-   python-multipart==0.0.6
    httpx==0.25.0
-   openai==1.3.0
-   anthropic==0.8.0
-   prometheus-client==0.19.0
-   opentelemetry-api==1.21.0
-   python-jose[cryptography]==3.3.0
-   passlib[bcrypt]==1.7.4
+   pygithub==2.1.1
+   python-gitlab==3.15.0
+   pyyaml==6.0.1
+   jsonschema==4.20.0  # For YAML validation
    ```
 
-3. **FastAPI Application Setup**
+3. **FastAPI Application Core**
    ```python
    # backend/app/main.py
    from fastapi import FastAPI
    from fastapi.middleware.cors import CORSMiddleware
-   from app.api.routes import kb, onboard, deploy
+   from app.api.routes import pipeline, kb
    from app.core.config import settings
-   
+
    app = FastAPI(
-       title="F-Ops DevOps AI Agent",
+       title="F-Ops — Local-First DevOps Assistant",
        version="0.1.0",
-       description="AI-powered DevOps automation platform"
+       description="Proposal-only CI/CD, IaC, and monitoring generation"
    )
-   
+
    app.add_middleware(
        CORSMiddleware,
-       allow_origins=settings.ALLOWED_ORIGINS,
+       allow_origins=["http://localhost:3000"],  # Local-first
        allow_credentials=True,
        allow_methods=["*"],
        allow_headers=["*"],
    )
-   
+
+   app.include_router(pipeline.router, prefix="/api/pipeline", tags=["pipeline-agent"])
    app.include_router(kb.router, prefix="/api/kb", tags=["knowledge-base"])
-   app.include_router(onboard.router, prefix="/api/onboard", tags=["onboarding"])
-   app.include_router(deploy.router, prefix="/api/deploy", tags=["deployment"])
    ```
 
 #### Afternoon (4 hours)
@@ -107,684 +106,829 @@
    ```python
    # backend/app/config.py
    from pydantic_settings import BaseSettings
-   
+
    class Settings(BaseSettings):
-       # API Settings
-       API_V1_STR: str = "/api/v1"
+       # Core
        PROJECT_NAME: str = "F-Ops"
-       
-       # Database
+       API_V1_STR: str = "/api/v1"
+
+       # Local Storage (no Postgres)
        SQLITE_URL: str = "sqlite:///./fops.db"
        CHROMA_PERSIST_DIR: str = "./chroma_db"
-       
-       # AI/ML
-       OPENAI_API_KEY: str = ""
-       ANTHROPIC_API_KEY: str = ""
-       DEFAULT_MODEL: str = "gpt-4"
-       
+       AUDIT_LOG_DIR: str = "./audit_logs"
+
+       # MCP Servers (local)
+       MCP_GITHUB_TOKEN: str = ""
+       MCP_GITLAB_TOKEN: str = ""
+
        # Security
-       SECRET_KEY: str = ""
-       ALGORITHM: str = "HS256"
-       ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-       
+       ALLOWED_REPOS: list = []  # Allow-listed repos
+       SCOPED_NAMESPACES: list = []
+
        class Config:
            env_file = ".env"
+
+   settings = Settings()
    ```
 
-2. **Database Models Setup**
+2. **SQLite Models (Minimal State)**
    ```python
-   # backend/app/models/base.py
-   from sqlalchemy import create_engine
+   # backend/app/models/state.py
+   from sqlalchemy import Column, Integer, String, DateTime, JSON
    from sqlalchemy.ext.declarative import declarative_base
-   from sqlalchemy.orm import sessionmaker
-   
+
    Base = declarative_base()
-   
-   # backend/app/models/deployment.py
-   class Deployment(Base):
-       __tablename__ = "deployments"
-       
+
+   class ApprovalIndex(Base):
+       __tablename__ = "approvals"
+
        id = Column(Integer, primary_key=True)
-       service_name = Column(String)
-       environment = Column(String)
-       status = Column(String)
+       pr_url = Column(String, unique=True)
+       repo = Column(String)
+       agent_type = Column(String)  # pipeline/infrastructure/monitoring
        created_at = Column(DateTime)
-       approved_by = Column(String)
-       dry_run_results = Column(JSON)
+       status = Column(String)  # pending/approved/rejected
+
+   class RunMetadata(Base):
+       __tablename__ = "runs"
+
+       id = Column(Integer, primary_key=True)
+       run_id = Column(String, unique=True)
+       command = Column(String)
+       start_time = Column(DateTime)
+       end_time = Column(DateTime)
+       status = Column(String)
    ```
 
-### Day 2: Chroma Vector Database & Knowledge Base
+### Day 2: Chroma Setup & Knowledge Collections
 
 #### Morning (4 hours)
-1. **Chroma Client Setup**
+1. **Chroma Knowledge Base Manager**
    ```python
-   # backend/app/core/knowledge_base.py
+   # backend/app/core/kb_manager.py
    import chromadb
    from chromadb.config import Settings as ChromaSettings
    from typing import List, Dict, Any
-   
-   class KnowledgeBase:
+
+   class KnowledgeBaseManager:
        def __init__(self, persist_directory: str):
            self.client = chromadb.PersistentClient(
                path=persist_directory,
                settings=ChromaSettings(
                    anonymized_telemetry=False,
-                   allow_reset=True
+                   allow_reset=False  # Safety
                )
            )
            self.init_collections()
-       
+
        def init_collections(self):
+           """Initialize the 5 core collections"""
            self.collections = {
-               'docs': self.client.get_or_create_collection("kb_docs"),
-               'pipelines': self.client.get_or_create_collection("kb_pipelines"),
-               'iac': self.client.get_or_create_collection("kb_iac"),
-               'incidents': self.client.get_or_create_collection("kb_incidents"),
-               'prompts': self.client.get_or_create_collection("kb_prompts")
+               'pipelines': self.client.get_or_create_collection(
+                   name="kb.pipelines",
+                   metadata={"description": "CI/CD pipeline templates"}
+               ),
+               'iac': self.client.get_or_create_collection(
+                   name="kb.iac",
+                   metadata={"description": "Infrastructure as Code"}
+               ),
+               'docs': self.client.get_or_create_collection(
+                   name="kb.docs",
+                   metadata={"description": "Documentation and runbooks"}
+               ),
+               'slo': self.client.get_or_create_collection(
+                   name="kb.slo",
+                   metadata={"description": "SLO definitions"}
+               ),
+               'incidents': self.client.get_or_create_collection(
+                   name="kb.incidents",
+                   metadata={"description": "Incident patterns"}
+               )
            }
-       
-       def add_document(self, collection: str, document: Dict[str, Any]):
-           # Implementation for adding documents
-           pass
-       
+
        def search(self, collection: str, query: str, k: int = 5):
-           # Implementation for semantic search
-           pass
+           """Search with citation support"""
+           results = self.collections[collection].query(
+               query_texts=[query],
+               n_results=k
+           )
+
+           # Format with citations
+           return [{
+               'text': doc,
+               'metadata': meta,
+               'citation': f"[{meta.get('source', 'KB')}:{meta.get('id', 'unknown')}]"
+           } for doc, meta in zip(results['documents'][0], results['metadatas'][0])]
    ```
 
-2. **Knowledge Connectors**
+2. **Citation Engine**
    ```python
-   # backend/app/core/connectors/github.py
-   class GitHubConnector:
-       def __init__(self, token: str):
-           self.token = token
-           self.client = Github(token)
-       
-       def fetch_repository_docs(self, repo_url: str):
-           # Fetch README, docs/, wiki
-           pass
-       
-       def fetch_ci_cd_configs(self, repo_url: str):
-           # Fetch .github/workflows, .gitlab-ci.yml, etc.
-           pass
-   
-   # backend/app/core/connectors/confluence.py
-   class ConfluenceConnector:
-       def __init__(self, url: str, token: str):
-           self.url = url
-           self.token = token
-       
-       def fetch_space_content(self, space_key: str):
-           # Fetch Confluence pages
+   # backend/app/core/citation_engine.py
+   from typing import List, Dict, Any
+
+   class CitationEngine:
+       def __init__(self, kb_manager):
+           self.kb = kb_manager
+
+       def generate_citations(self, generated_content: str, kb_sources: List[Dict]) -> str:
+           """Add citations to generated content"""
+           citations = []
+           for idx, source in enumerate(kb_sources, 1):
+               citations.append(f"[{idx}] {source['citation']}: {source['metadata'].get('title', 'Untitled')}")
+
+           return f"{generated_content}\n\n# Citations\n" + "\n".join(citations)
+
+       def track_usage(self, content_hash: str, sources: List[str]):
+           """Track which KB sources were used"""
+           # Log to audit trail
            pass
    ```
 
 #### Afternoon (4 hours)
-1. **Prompt Templates Integration**
+1. **KB Connectors Implementation**
    ```python
-   # knowledge_base/prompts/devops_prompts.py
-   PROMPT_TEMPLATES = {
-       "zero_to_deploy": """
-       Analyze the repository at {repo_url} and create a complete deployment pipeline.
-       
-       Stack detected: {stack}
-       Target environment: {environment}
-       Deployment target: {target}
-       
-       Generate:
-       1. CI/CD pipeline configuration
-       2. Infrastructure as Code templates
-       3. Deployment scripts
-       4. Environment-specific configurations
-       5. Security policies
-       
-       Requirements:
-       - Use best practices for {stack}
-       - Include security scanning
-       - Implement proper secret management
-       - Add health checks and monitoring
-       """,
-       
-       "incident_analysis": """
-       Analyze the incident for service: {service_name}
-       
-       Current symptoms:
-       {symptoms}
-       
-       Recent changes:
-       {recent_changes}
-       
-       Metrics data:
-       {metrics}
-       
-       Provide:
-       1. Root cause analysis
-       2. Immediate mitigation steps
-       3. Long-term fix recommendations
-       4. Prevention strategies
-       """,
-       
-       "infrastructure_optimization": """
-       Review the current infrastructure and suggest optimizations.
-       
-       Current setup:
-       {infrastructure_details}
-       
-       Usage patterns:
-       {usage_metrics}
-       
-       Cost data:
-       {cost_breakdown}
-       
-       Recommend:
-       1. Cost optimization strategies
-       2. Performance improvements
-       3. Scaling recommendations
-       4. Security enhancements
-       """
-   }
+   # backend/app/mcp_servers/mcp_kb.py
+   from typing import Dict, Any, List
+   import httpx
+   from bs4 import BeautifulSoup
+
+   class MCPKnowledgeBase:
+       def __init__(self, kb_manager):
+           self.kb = kb_manager
+
+       async def connect(self, uri: str) -> Dict[str, Any]:
+           """Crawl and ingest content from URI"""
+           if "github.com" in uri:
+               return await self._connect_github(uri)
+           elif "confluence" in uri:
+               return await self._connect_confluence(uri)
+           else:
+               return await self._connect_generic(uri)
+
+       async def _connect_github(self, repo_url: str):
+           """Ingest GitHub repo docs"""
+           # Extract README, docs/, .github/workflows
+           pass
+
+       def search(self, query: str, collections: List[str] = None) -> List[Dict]:
+           """Multi-collection search"""
+           results = []
+           for collection in (collections or self.kb.collections.keys()):
+               results.extend(self.kb.search(collection, query))
+           return results
+
+       def compose(self, template_type: str, context: Dict) -> str:
+           """Compose content from KB patterns"""
+           # RAG-based composition
+           relevant_docs = self.search(context.get('query', ''))
+           # Merge patterns and return with citations
+           pass
    ```
 
-2. **Document Processing Pipeline**
+2. **JSONL Audit Logger**
    ```python
-   # backend/app/core/document_processor.py
-   from langchain.text_splitter import RecursiveCharacterTextSplitter
-   from langchain.embeddings import OpenAIEmbeddings
-   
-   class DocumentProcessor:
-       def __init__(self):
-           self.text_splitter = RecursiveCharacterTextSplitter(
-               chunk_size=1000,
-               chunk_overlap=100
-           )
-           self.embeddings = OpenAIEmbeddings()
-       
-       def process_document(self, content: str, metadata: Dict):
-           chunks = self.text_splitter.split_text(content)
-           embeddings = self.embeddings.embed_documents(chunks)
-           
-           return [
-               {
-                   "text": chunk,
-                   "embedding": embedding,
-                   "metadata": metadata
-               }
-               for chunk, embedding in zip(chunks, embeddings)
-           ]
+   # backend/app/core/audit_logger.py
+   import json
+   from datetime import datetime
+   from pathlib import Path
+   from typing import Dict, Any
+
+   class AuditLogger:
+       def __init__(self, log_dir: str = "./audit_logs"):
+           self.log_dir = Path(log_dir)
+           self.log_dir.mkdir(exist_ok=True)
+           self.current_log = self.log_dir / f"audit_{datetime.now():%Y%m%d}.jsonl"
+
+       def log_operation(self, operation: Dict[str, Any]):
+           """Log all operations immutably"""
+           entry = {
+               "timestamp": datetime.now().isoformat(),
+               "operation_type": operation.get("type"),
+               "agent": operation.get("agent"),
+               "inputs": operation.get("inputs"),
+               "outputs": operation.get("outputs"),
+               "citations": operation.get("citations", []),
+               "dry_run_results": operation.get("dry_run_results"),
+               "pr_url": operation.get("pr_url")
+           }
+
+           with open(self.current_log, 'a') as f:
+               f.write(json.dumps(entry) + '\n')
+
+       def log_agent_decision(self, agent: str, decision: Dict):
+           """Log agent reasoning and decisions"""
+           self.log_operation({
+               "type": "agent_decision",
+               "agent": agent,
+               "decision": decision
+           })
    ```
 
-### Day 3: CLI Implementation & Basic Commands
+### Day 3: Pipeline Agent Implementation
 
 #### Morning (4 hours)
-1. **CLI Framework Setup**
+1. **Pipeline Agent Core**
+   ```python
+   # backend/app/agents/pipeline_agent.py
+   from typing import Dict, Any, List
+   from langchain import LLMChain
+   from app.core.kb_manager import KnowledgeBaseManager
+   from app.core.citation_engine import CitationEngine
+   import yaml
+   import jsonschema
+
+   class PipelineAgent:
+       def __init__(self, kb_manager: KnowledgeBaseManager):
+           self.kb = kb_manager
+           self.citation_engine = CitationEngine(kb_manager)
+
+       def analyze_repository(self, repo_url: str) -> Dict[str, Any]:
+           """Detect stack and frameworks"""
+           # Clone repo (temporarily)
+           # Detect: language, Dockerfile, package.json, requirements.txt
+           # Return stack analysis
+           pass
+
+       def generate_pipeline(self,
+                           repo_url: str,
+                           stack: Dict,
+                           target: str,
+                           environments: List[str]) -> Dict[str, Any]:
+           """Generate CI/CD pipeline with citations"""
+
+           # 1. Search KB for similar pipelines
+           similar_pipelines = self.kb.search(
+               collection='pipelines',
+               query=f"{stack['language']} {target} CI/CD",
+               k=5
+           )
+
+           # 2. Compose pipeline
+           if "github.com" in repo_url:
+               pipeline = self._generate_github_actions(stack, target, environments)
+           else:
+               pipeline = self._generate_gitlab_ci(stack, target, environments)
+
+           # 3. Add security scans and SLO gates
+           pipeline = self._add_security_gates(pipeline)
+           pipeline = self._add_slo_gates(pipeline)
+
+           # 4. Validate syntax
+           self._validate_yaml(pipeline)
+
+           # 5. Add citations
+           pipeline_with_citations = self.citation_engine.generate_citations(
+               pipeline,
+               similar_pipelines
+           )
+
+           return {
+               "pipeline": pipeline_with_citations,
+               "citations": [s['citation'] for s in similar_pipelines],
+               "validation": "passed"
+           }
+
+       def _generate_github_actions(self, stack: Dict, target: str, envs: List[str]) -> str:
+           """Generate GitHub Actions workflow"""
+           workflow = {
+               'name': 'CI/CD Pipeline',
+               'on': {'push': {'branches': ['main']}, 'pull_request': {}},
+               'jobs': {}
+           }
+
+           # Build job
+           workflow['jobs']['build'] = {
+               'runs-on': 'ubuntu-latest',
+               'steps': [
+                   {'uses': 'actions/checkout@v3'},
+                   {'name': 'Build', 'run': f"# Build commands for {stack['language']}"}
+               ]
+           }
+
+           # Add security scanning
+           workflow['jobs']['security'] = {
+               'runs-on': 'ubuntu-latest',
+               'steps': [
+                   {'name': 'Security Scan', 'run': 'echo "Security scanning..."'}
+               ]
+           }
+
+           return yaml.dump(workflow)
+
+       def _validate_yaml(self, yaml_content: str):
+           """Validate YAML syntax"""
+           try:
+               yaml.safe_load(yaml_content)
+           except yaml.YAMLError as e:
+               raise ValueError(f"Invalid YAML: {e}")
+   ```
+
+2. **PR Orchestrator**
+   ```python
+   # backend/app/core/pr_orchestrator.py
+   from github import Github
+   import gitlab
+   from typing import Dict, Any, List
+
+   class PROrchestrator:
+       def __init__(self, github_token: str, gitlab_token: str):
+           self.github = Github(github_token)
+           self.gitlab = gitlab.Gitlab('https://gitlab.com', private_token=gitlab_token)
+
+       def create_pr(self,
+                    repo_url: str,
+                    files: Dict[str, str],
+                    title: str,
+                    body: str,
+                    dry_run_artifacts: Dict = None) -> str:
+           """Create PR/MR with files and dry-run results"""
+
+           if "github.com" in repo_url:
+               return self._create_github_pr(repo_url, files, title, body, dry_run_artifacts)
+           else:
+               return self._create_gitlab_mr(repo_url, files, title, body, dry_run_artifacts)
+
+       def _create_github_pr(self, repo_url: str, files: Dict, title: str, body: str, artifacts: Dict) -> str:
+           """Create GitHub PR"""
+           # Parse repo from URL
+           # Create branch
+           # Add files
+           # Attach dry-run results as PR comment
+           # Return PR URL
+           pass
+
+       def attach_artifacts(self, pr_url: str, artifacts: Dict):
+           """Attach dry-run/plan artifacts to PR"""
+           # Format artifacts as markdown
+           # Add as PR comment
+           pass
+   ```
+
+#### Afternoon (4 hours)
+1. **CLI Implementation**
    ```python
    # cli/fops/cli.py
    import typer
-   from typing import Optional
-   from fops.commands import onboard, deploy, kb, incident
-   
+   from typing import List, Optional
+   from fops.commands import onboard, kb
+
    app = typer.Typer(
        name="fops",
-       help="F-Ops: AI-powered DevOps automation CLI"
+       help="F-Ops: Local-first DevOps assistant (proposal-only)"
    )
-   
+
    app.add_typer(onboard.app, name="onboard")
-   app.add_typer(deploy.app, name="deploy")
    app.add_typer(kb.app, name="kb")
-   app.add_typer(incident.app, name="incident")
-   
+
    @app.callback()
-   def main(
-       dry_run: bool = typer.Option(False, "--dry-run", help="Run in dry-run mode"),
-       config: Optional[str] = typer.Option(None, "--config", help="Config file path"),
-       verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output")
-   ):
-       """F-Ops CLI - AI-powered DevOps automation"""
-       # Set global options
+   def main():
+       """F-Ops CLI - All operations generate PR/MRs for review"""
        pass
    ```
 
-2. **Onboard Command Implementation**
+2. **Onboard Command**
    ```python
    # cli/fops/commands/onboard.py
    import typer
    from typing import List
    from enum import Enum
-   
+   import httpx
+
    app = typer.Typer()
-   
-   class DeploymentTarget(str, Enum):
+
+   class Target(str, Enum):
        k8s = "k8s"
        serverless = "serverless"
        static = "static"
-   
+
    @app.command()
-   def repo(
-       repo_url: str = typer.Argument(..., help="Repository URL"),
-       target: DeploymentTarget = typer.Option(DeploymentTarget.k8s, "--target", "-t"),
-       environments: List[str] = typer.Option(["staging", "prod"], "--env", "-e"),
-       auto_detect: bool = typer.Option(True, "--auto-detect", help="Auto-detect stack")
+   def main(
+       repo: str = typer.Argument(..., help="Repository URL"),
+       target: Target = typer.Option(Target.k8s, "--target", "-t"),
+       env: List[str] = typer.Option(["staging", "prod"], "--env", "-e")
    ):
-       """Onboard a new repository with zero-to-deploy setup"""
-       typer.echo(f"🚀 Onboarding repository: {repo_url}")
-       
-       # 1. Clone and analyze repository
-       # 2. Detect technology stack
-       # 3. Generate CI/CD pipeline
-       # 4. Create IaC templates
-       # 5. Setup environments
-       # 6. Create PR with changes
-       
-       typer.echo("✅ Onboarding complete! PR created: #123")
+       """Generate CI/CD pipeline and infrastructure configs"""
+       typer.echo(f"🚀 Onboarding repository: {repo}")
+       typer.echo(f"   Target: {target.value}")
+       typer.echo(f"   Environments: {', '.join(env)}")
+
+       # Call Pipeline Agent
+       response = httpx.post(
+           "http://localhost:8000/api/pipeline/generate",
+           json={
+               "repo_url": repo,
+               "target": target.value,
+               "environments": env
+           }
+       )
+
+       if response.status_code == 200:
+           result = response.json()
+           typer.echo(f"✅ Pipeline generated with {len(result['citations'])} KB citations")
+           typer.echo(f"📝 PR created: {result['pr_url']}")
+
+           # Note: Infrastructure Agent will be added in Week 2
+           typer.echo("ℹ️  Infrastructure configs will be available in Week 2")
+       else:
+           typer.echo(f"❌ Error: {response.text}", err=True)
+   ```
+
+### Day 4: MCP Server Implementation
+
+#### Morning (4 hours)
+1. **MCP GitHub Server**
+   ```python
+   # backend/app/mcp_servers/mcp_github.py
+   from github import Github
+   from typing import Dict, Any, List
+
+   class MCPGitHub:
+       def __init__(self, token: str, allowed_repos: List[str]):
+           self.client = Github(token)
+           self.allowed_repos = allowed_repos
+
+       def validate_repo(self, repo_url: str):
+           """Check if repo is allow-listed"""
+           if not any(allowed in repo_url for allowed in self.allowed_repos):
+               raise ValueError(f"Repository not allow-listed: {repo_url}")
+
+       def create_pr(self, params: Dict[str, Any]) -> str:
+           """Create PR with typed interface (no shell execution)"""
+           self.validate_repo(params['repo_url'])
+
+           repo = self.client.get_repo(params['repo_name'])
+
+           # Create branch
+           base_branch = repo.get_branch("main")
+           repo.create_git_ref(
+               ref=f"refs/heads/{params['branch_name']}",
+               sha=base_branch.commit.sha
+           )
+
+           # Add files
+           for path, content in params['files'].items():
+               repo.create_file(
+                   path=path,
+                   message=f"Add {path}",
+                   content=content,
+                   branch=params['branch_name']
+               )
+
+           # Create PR
+           pr = repo.create_pull(
+               title=params['title'],
+               body=params['body'],
+               head=params['branch_name'],
+               base="main"
+           )
+
+           return pr.html_url
+
+       def get_logs(self, workflow_run_id: int) -> str:
+           """Fetch workflow logs"""
+           # Typed interface to fetch logs
+           pass
+   ```
+
+2. **MCP GitLab Server**
+   ```python
+   # backend/app/mcp_servers/mcp_gitlab.py
+   import gitlab
+   from typing import Dict, Any, List
+
+   class MCPGitLab:
+       def __init__(self, token: str, allowed_repos: List[str]):
+           self.client = gitlab.Gitlab('https://gitlab.com', private_token=token)
+           self.allowed_repos = allowed_repos
+
+       def create_mr(self, params: Dict[str, Any]) -> str:
+           """Create GitLab MR"""
+           self.validate_repo(params['repo_url'])
+
+           project = self.client.projects.get(params['project_id'])
+
+           # Create branch and add files
+           branch = project.branches.create({
+               'branch': params['branch_name'],
+               'ref': 'main'
+           })
+
+           # Create MR
+           mr = project.mergerequests.create({
+               'source_branch': params['branch_name'],
+               'target_branch': 'main',
+               'title': params['title'],
+               'description': params['body']
+           })
+
+           return mr.web_url
    ```
 
 #### Afternoon (4 hours)
-1. **Knowledge Base Commands**
+1. **KB Commands**
    ```python
    # cli/fops/commands/kb.py
    import typer
    from typing import Optional
-   
+   import httpx
+
    app = typer.Typer()
-   
+
    @app.command()
    def connect(
-       uri: str = typer.Argument(..., help="Source URI (GitHub, Confluence, etc.)"),
-       connector_type: Optional[str] = typer.Option(None, "--type", "-t"),
-       sync: bool = typer.Option(False, "--sync", help="Enable auto-sync")
+       uri: str = typer.Argument(..., help="URI to connect (GitHub/Confluence/Docs)")
    ):
-       """Connect a knowledge source"""
-       typer.echo(f"📚 Connecting to knowledge source: {uri}")
-       # Implementation
-   
+       """Connect and ingest knowledge source"""
+       typer.echo(f"📚 Connecting to: {uri}")
+
+       response = httpx.post(
+           "http://localhost:8000/api/kb/connect",
+           json={"uri": uri}
+       )
+
+       if response.status_code == 200:
+           result = response.json()
+           typer.echo(f"✅ Ingested {result['documents']} documents")
+           typer.echo(f"📊 Collections updated: {', '.join(result['collections'])}")
+       else:
+           typer.echo(f"❌ Error: {response.text}", err=True)
+
    @app.command()
    def search(
        query: str = typer.Argument(..., help="Search query"),
        collection: Optional[str] = typer.Option(None, "--collection", "-c"),
        limit: int = typer.Option(5, "--limit", "-l")
    ):
-       """Search the knowledge base"""
+       """Search knowledge base"""
        typer.echo(f"🔍 Searching for: {query}")
-       # Implementation
-   
-   @app.command()
-   def sync():
-       """Sync all connected knowledge sources"""
-       typer.echo("🔄 Syncing knowledge sources...")
-       # Implementation
+
+       params = {"q": query, "limit": limit}
+       if collection:
+           params["collection"] = collection
+
+       response = httpx.get(
+           "http://localhost:8000/api/kb/search",
+           params=params
+       )
+
+       if response.status_code == 200:
+           results = response.json()["results"]
+           for idx, result in enumerate(results, 1):
+               typer.echo(f"\n{idx}. {result['metadata']['title']}")
+               typer.echo(f"   {result['text'][:200]}...")
+               typer.echo(f"   Citation: {result['citation']}")
+       else:
+           typer.echo(f"❌ Error: {response.text}", err=True)
    ```
 
-2. **Deploy Command Implementation**
+2. **API Routes**
    ```python
-   # cli/fops/commands/deploy.py
-   import typer
-   from typing import Optional
-   
-   app = typer.Typer()
-   
-   @app.command()
-   def service(
-       service_name: str = typer.Argument(..., help="Service name"),
-       environment: str = typer.Option("staging", "--env", "-e"),
-       version: Optional[str] = typer.Option(None, "--version", "-v"),
-       approve: bool = typer.Option(False, "--approve", help="Auto-approve")
-   ):
-       """Deploy a service to an environment"""
-       typer.echo(f"🚀 Deploying {service_name} to {environment}")
-       
-       # 1. Validate deployment
-       # 2. Run policy checks
-       # 3. Execute dry-run
-       # 4. Show dry-run results
-       # 5. Wait for approval (if not auto-approved)
-       # 6. Execute deployment
-       # 7. Monitor deployment
-       
-       typer.echo("✅ Deployment successful!")
-   ```
+   # backend/app/api/routes/pipeline.py
+   from fastapi import APIRouter, HTTPException
+   from app.agents.pipeline_agent import PipelineAgent
+   from app.core.pr_orchestrator import PROrchestrator
+   from app.schemas.pipeline import PipelineRequest, PipelineResponse
 
-### Day 4: MCP Pack Foundations
+   router = APIRouter()
 
-#### Morning (4 hours)
-1. **Base MCP Pack Structure**
-   ```python
-   # mcp_packs/base/mcp_pack.py
-   from abc import ABC, abstractmethod
-   from typing import Dict, Any, List
-   
-   class MCPPack(ABC):
-       def __init__(self, config: Dict[str, Any]):
-           self.config = config
-           self.validate_config()
-       
-       @abstractmethod
-       def validate_config(self):
-           """Validate pack configuration"""
-           pass
-       
-       @abstractmethod
-       def execute_action(self, action: str, params: Dict[str, Any]):
-           """Execute a pack action"""
-           pass
-       
-       @abstractmethod
-       def get_available_actions(self) -> List[str]:
-           """Return list of available actions"""
-           pass
-   ```
+   @router.post("/generate", response_model=PipelineResponse)
+   async def generate_pipeline(request: PipelineRequest):
+       """Generate CI/CD pipeline and create PR"""
+       try:
+           # Initialize agent
+           pipeline_agent = PipelineAgent(kb_manager)
 
-2. **GitHub MCP Pack**
-   ```python
-   # mcp_packs/github/github_pack.py
-   from github import Github
-   from mcp_packs.base import MCPPack
-   
-   class GitHubPack(MCPPack):
-       def __init__(self, config: Dict[str, Any]):
-           super().__init__(config)
-           self.client = Github(config['token'])
-       
-       def validate_config(self):
-           if 'token' not in self.config:
-               raise ValueError("GitHub token required")
-       
-       def execute_action(self, action: str, params: Dict[str, Any]):
-           actions = {
-               'create_pr': self.create_pr,
-               'get_workflows': self.get_workflows,
-               'trigger_workflow': self.trigger_workflow,
-               'get_repository_info': self.get_repository_info
-           }
-           
-           if action not in actions:
-               raise ValueError(f"Unknown action: {action}")
-           
-           return actions[action](params)
-       
-       def create_pr(self, params: Dict[str, Any]):
-           # Create pull request implementation
-           pass
-       
-       def get_workflows(self, params: Dict[str, Any]):
-           # Get GitHub Actions workflows
-           pass
-   ```
+           # Analyze repository
+           stack = pipeline_agent.analyze_repository(request.repo_url)
 
-#### Afternoon (4 hours)
-1. **Kubernetes MCP Pack**
-   ```python
-   # mcp_packs/kubernetes/k8s_pack.py
-   from kubernetes import client, config
-   from mcp_packs.base import MCPPack
-   
-   class KubernetesPack(MCPPack):
-       def __init__(self, config: Dict[str, Any]):
-           super().__init__(config)
-           self.setup_k8s_client()
-       
-       def setup_k8s_client(self):
-           if self.config.get('in_cluster'):
-               config.load_incluster_config()
-           else:
-               config.load_kube_config(
-                   config_file=self.config.get('kubeconfig')
-               )
-           
-           self.v1 = client.CoreV1Api()
-           self.apps_v1 = client.AppsV1Api()
-       
-       def execute_action(self, action: str, params: Dict[str, Any]):
-           actions = {
-               'deploy': self.deploy_application,
-               'scale': self.scale_deployment,
-               'rollback': self.rollback_deployment,
-               'get_pods': self.get_pods,
-               'get_logs': self.get_pod_logs
-           }
-           
-           return actions[action](params)
-       
-       def deploy_application(self, params: Dict[str, Any]):
-           # Deploy application to Kubernetes
-           pass
-   ```
-
-2. **AWS MCP Pack**
-   ```python
-   # mcp_packs/aws/aws_pack.py
-   import boto3
-   from mcp_packs.base import MCPPack
-   
-   class AWSPack(MCPPack):
-       def __init__(self, config: Dict[str, Any]):
-           super().__init__(config)
-           self.setup_aws_clients()
-       
-       def setup_aws_clients(self):
-           session = boto3.Session(
-               aws_access_key_id=self.config.get('access_key'),
-               aws_secret_access_key=self.config.get('secret_key'),
-               region_name=self.config.get('region', 'us-east-1')
+           # Generate pipeline
+           result = pipeline_agent.generate_pipeline(
+               repo_url=request.repo_url,
+               stack=stack,
+               target=request.target,
+               environments=request.environments
            )
-           
-           self.ec2 = session.client('ec2')
-           self.ecs = session.client('ecs')
-           self.lambda_client = session.client('lambda')
-           self.cloudformation = session.client('cloudformation')
-       
-       def execute_action(self, action: str, params: Dict[str, Any]):
-           actions = {
-               'deploy_lambda': self.deploy_lambda,
-               'update_ecs_service': self.update_ecs_service,
-               'create_stack': self.create_cloudformation_stack
-           }
-           
-           return actions[action](params)
+
+           # Create PR
+           pr_orchestrator = PROrchestrator(
+               settings.MCP_GITHUB_TOKEN,
+               settings.MCP_GITLAB_TOKEN
+           )
+
+           pr_url = pr_orchestrator.create_pr(
+               repo_url=request.repo_url,
+               files={
+                   ".github/workflows/pipeline.yml": result["pipeline"]
+               },
+               title="[F-Ops] Add CI/CD Pipeline",
+               body=f"Generated pipeline with {len(result['citations'])} KB citations"
+           )
+
+           # Log to audit
+           audit_logger.log_operation({
+               "type": "pipeline_generation",
+               "agent": "pipeline",
+               "inputs": request.dict(),
+               "outputs": {"pr_url": pr_url},
+               "citations": result["citations"]
+           })
+
+           return PipelineResponse(
+               pr_url=pr_url,
+               citations=result["citations"],
+               validation_status="passed"
+           )
+
+       except Exception as e:
+           raise HTTPException(status_code=500, detail=str(e))
    ```
 
 ### Day 5: Integration & Testing
 
 #### Morning (4 hours)
-1. **Agent Core Integration**
+1. **End-to-End Pipeline Test**
    ```python
-   # backend/app/core/agent.py
-   from langchain.agents import initialize_agent, Tool
-   from langchain.llms import OpenAI
-   from app.core.knowledge_base import KnowledgeBase
-   from mcp_packs import GitHubPack, KubernetesPack, AWSPack
-   
-   class DevOpsAgent:
-       def __init__(self):
-           self.llm = OpenAI(temperature=0)
-           self.kb = KnowledgeBase("./chroma_db")
-           self.setup_tools()
-           self.setup_agent()
-       
-       def setup_tools(self):
-           self.tools = [
-               Tool(
-                   name="Knowledge Search",
-                   func=self.kb.search,
-                   description="Search the knowledge base"
-               ),
-               Tool(
-                   name="GitHub Operations",
-                   func=self.github_operations,
-                   description="Perform GitHub operations"
-               ),
-               Tool(
-                   name="Kubernetes Operations",
-                   func=self.k8s_operations,
-                   description="Perform Kubernetes operations"
-               )
-           ]
-       
-       def setup_agent(self):
-           self.agent = initialize_agent(
-               self.tools,
-               self.llm,
-               agent="zero-shot-react-description",
-               verbose=True
-           )
-       
-       def process_request(self, request: str):
-           return self.agent.run(request)
+   # tests/test_pipeline_agent.py
+   import pytest
+   from app.agents.pipeline_agent import PipelineAgent
+   from app.core.kb_manager import KnowledgeBaseManager
+
+   @pytest.fixture
+   def pipeline_agent():
+       kb = KnowledgeBaseManager("./test_chroma")
+       return PipelineAgent(kb)
+
+   def test_github_actions_generation(pipeline_agent):
+       """Test GitHub Actions generation"""
+       result = pipeline_agent.generate_pipeline(
+           repo_url="https://github.com/test/repo",
+           stack={"language": "python", "framework": "fastapi"},
+           target="k8s",
+           environments=["staging", "prod"]
+       )
+
+       assert "pipeline" in result
+       assert "citations" in result
+       assert len(result["citations"]) > 0
+       assert "validation" in result
+       assert result["validation"] == "passed"
+
+   def test_gitlab_ci_generation(pipeline_agent):
+       """Test GitLab CI generation"""
+       result = pipeline_agent.generate_pipeline(
+           repo_url="https://gitlab.com/test/repo",
+           stack={"language": "node", "framework": "express"},
+           target="serverless",
+           environments=["dev", "prod"]
+       )
+
+       assert ".gitlab-ci.yml" in result["pipeline"] or "stages:" in result["pipeline"]
+
+   def test_security_gates_included(pipeline_agent):
+       """Test security scanning is included"""
+       result = pipeline_agent.generate_pipeline(
+           repo_url="https://github.com/test/repo",
+           stack={"language": "python"},
+           target="static",
+           environments=["prod"]
+       )
+
+       assert "security" in result["pipeline"].lower() or "scan" in result["pipeline"].lower()
    ```
 
-2. **JSONL Audit Logger**
+2. **KB Integration Test**
    ```python
-   # backend/app/core/audit.py
-   import json
-   from datetime import datetime
-   from pathlib import Path
-   
-   class AuditLogger:
-       def __init__(self, log_dir: str = "./audit_logs"):
-           self.log_dir = Path(log_dir)
-           self.log_dir.mkdir(exist_ok=True)
-           self.current_log = self.log_dir / f"audit_{datetime.now():%Y%m%d}.jsonl"
-       
-       def log_action(self, action: str, user: str, details: Dict[str, Any]):
-           entry = {
-               "timestamp": datetime.now().isoformat(),
-               "action": action,
-               "user": user,
-               "details": details
-           }
-           
-           with open(self.current_log, 'a') as f:
-               f.write(json.dumps(entry) + '\n')
-       
-       def get_audit_trail(self, start_date=None, end_date=None, action=None):
-           # Query audit logs
-           pass
+   # tests/test_kb_integration.py
+   import pytest
+   from app.core.kb_manager import KnowledgeBaseManager
+
+   @pytest.fixture
+   def kb_manager():
+       return KnowledgeBaseManager("./test_chroma")
+
+   def test_kb_search_with_citations(kb_manager):
+       """Test KB search returns citations"""
+       # Add test document
+       kb_manager.collections['pipelines'].add(
+           documents=["GitHub Actions for Python with pytest"],
+           metadatas=[{"source": "github", "id": "test-001"}],
+           ids=["doc1"]
+       )
+
+       results = kb_manager.search("pipelines", "python testing", k=1)
+
+       assert len(results) > 0
+       assert "citation" in results[0]
+       assert "[github:test-001]" in results[0]["citation"]
+
+   def test_multi_collection_search(kb_manager):
+       """Test searching across collections"""
+       mcp_kb = MCPKnowledgeBase(kb_manager)
+       results = mcp_kb.search("kubernetes deployment", collections=["pipelines", "iac"])
+
+       assert isinstance(results, list)
    ```
 
 #### Afternoon (4 hours)
-1. **End-to-End Testing**
+1. **CLI Testing**
    ```python
-   # tests/test_e2e.py
-   import pytest
-   from fastapi.testclient import TestClient
-   from app.main import app
-   
-   client = TestClient(app)
-   
-   def test_onboarding_flow():
-       # Test complete onboarding flow
-       response = client.post("/api/onboard/repo", json={
-           "repo_url": "https://github.com/test/repo",
-           "target": "k8s",
-           "environments": ["staging", "prod"]
-       })
-       assert response.status_code == 200
-       assert "pr_url" in response.json()
-   
-   def test_knowledge_base_operations():
-       # Test KB connect and search
-       response = client.post("/api/kb/connect", json={
-           "uri": "https://github.com/test/docs",
-           "type": "github"
-       })
-       assert response.status_code == 200
-       
-       response = client.get("/api/kb/search?q=deployment")
-       assert response.status_code == 200
-       assert len(response.json()["results"]) > 0
+   # tests/test_cli.py
+   from typer.testing import CliRunner
+   from fops.cli import app
+
+   runner = CliRunner()
+
+   def test_onboard_command():
+       result = runner.invoke(app, [
+           "onboard",
+           "https://github.com/test/repo",
+           "--target", "k8s",
+           "--env", "staging",
+           "--env", "prod"
+       ])
+
+       assert result.exit_code == 0
+       assert "Onboarding repository" in result.stdout
+       assert "PR created" in result.stdout or "Error" in result.stdout
+
+   def test_kb_search_command():
+       result = runner.invoke(app, [
+           "kb", "search",
+           "deployment strategies"
+       ])
+
+       assert result.exit_code == 0
+       assert "Searching for" in result.stdout
    ```
 
-2. **Performance Testing**
-   ```python
-   # tests/test_performance.py
-   import time
-   import concurrent.futures
-   
-   def test_knowledge_base_performance():
-       start_time = time.time()
-       
-       # Test concurrent searches
-       with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-           futures = [
-               executor.submit(kb.search, "deployment", query)
-               for query in ["k8s", "docker", "terraform", "helm"]
-           ]
-           results = [f.result() for f in futures]
-       
-       elapsed_time = time.time() - start_time
-       assert elapsed_time < 2.0  # Should complete in under 2 seconds
+2. **Docker Setup**
+   ```yaml
+   # docker-compose.yml
+   version: '3.8'
+
+   services:
+     backend:
+       build: ./backend
+       ports:
+         - "8000:8000"
+       volumes:
+         - ./chroma_db:/app/chroma_db
+         - ./audit_logs:/app/audit_logs
+         - ./fops.db:/app/fops.db
+       environment:
+         - CHROMA_PERSIST_DIR=/app/chroma_db
+         - AUDIT_LOG_DIR=/app/audit_logs
+         - SQLITE_URL=sqlite:////app/fops.db
+       command: uvicorn app.main:app --host 0.0.0.0 --reload
+
+     chroma:
+       image: chromadb/chroma
+       ports:
+         - "8001:8000"
+       volumes:
+         - ./chroma_db:/chroma/chroma
    ```
 
-## Deliverables
+## Deliverables for Week 1
 
-### By End of Week 1:
-1. ✅ Core FastAPI backend running
-2. ✅ Chroma vector database configured
-3. ✅ Basic CLI with 4 commands (onboard, deploy, kb, incident)
-4. ✅ 3 MCP packs implemented (GitHub, Kubernetes, AWS)
-5. ✅ 10+ prompt templates integrated
-6. ✅ JSONL audit logging functional
-7. ✅ SQLite state management ready
-8. ✅ Basic authentication and authorization
+### Completed Components
+1. ✅ FastAPI core with agent orchestration
+2. ✅ Chroma with 5 KB collections (pipelines, iac, docs, slo, incidents)
+3. ✅ **Pipeline Agent** generating CI/CD with citations
+4. ✅ CLI: `fops onboard` and `fops kb` commands
+5. ✅ MCP servers: `mcp-kb`, `mcp-github`, `mcp-gitlab`
+6. ✅ PR/MR creation with validated YAML
+7. ✅ JSONL audit logging
+8. ✅ SQLite minimal state
 9. ✅ Docker containerization
-10. ✅ Initial test suite
 
-## Success Criteria
+### Success Criteria Met
+- ✅ Generate valid GitHub Actions/GitLab CI pipelines
+- ✅ KB search returns relevant snippets with citations
+- ✅ All operations logged to audit trail
+- ✅ PR/MR created with pipeline configs
+- ✅ YAML syntax validation passes
 
-### Technical Metrics:
-- API response time < 500ms for 95% of requests
-- Knowledge base search accuracy > 80%
-- CLI command execution < 2 seconds
-- Test coverage > 70%
-- Zero critical security vulnerabilities
+### Week 1 Output Example
+```bash
+$ fops onboard https://github.com/acme/api --target k8s --env staging --env prod
 
-### Functional Metrics:
-- Successfully onboard a sample repository
-- Execute a dry-run deployment
-- Connect and search knowledge base
-- Generate audit logs for all actions
+🚀 Onboarding repository: https://github.com/acme/api
+   Target: k8s
+   Environments: staging, prod
 
-## Known Risks & Mitigations
+✅ Pipeline generated with 5 KB citations
+📝 PR created: https://github.com/acme/api/pull/42
 
-### Risk 1: LLM API Rate Limits
-- **Mitigation**: Implement caching, rate limiting, and fallback to local models
+PR contains:
+- .github/workflows/pipeline.yml (with security scans & SLO gates)
+- Citations from KB: [pipelines:k8s-001], [pipelines:python-003], ...
 
-### Risk 2: Vector Search Performance
-- **Mitigation**: Optimize chunk sizes, implement pagination, use metadata filtering
+ℹ️  Infrastructure configs will be available in Week 2
+```
 
-### Risk 3: MCP Pack Integration Complexity
-- **Mitigation**: Start with mock implementations, gradual integration
-
-## Next Phase Preview
-
-Phase 2 will focus on:
-- Web UI implementation with React
-- Advanced deployment workflows
-- Real-time monitoring integration
-- Enhanced security features
-- User management system
-
-## Team Assignments
-
-### Backend Developer:
-- FastAPI setup
-- Database models
-- API endpoints
-- MCP pack integration
-
-### AI/ML Engineer:
-- LangChain integration
-- Prompt engineering
-- Knowledge base implementation
-- Vector search optimization
-
-### DevOps Engineer:
-- Docker setup
-- CI/CD pipeline
-- Infrastructure setup
-- Monitoring integration
-
-### CLI Developer:
-- Typer implementation
-- Command structure
-- Testing
-- Documentation
+## Next Week Preview (Week 2)
+- **Infrastructure Agent**: Terraform + Helm generation
+- `terraform plan` and `helm --dry-run` integration
+- Web UI: Pipeline and Infrastructure modules
+- PR/MR with attached dry-run artifacts
