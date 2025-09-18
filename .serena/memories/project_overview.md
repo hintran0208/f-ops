@@ -1,52 +1,31 @@
 # F-Ops Project Overview
 
 ## Purpose
-F-Ops is an AI-powered DevOps automation platform that combines intelligent automation, knowledge-driven operations, and safe deployment practices. It enables teams to achieve zero-to-deploy for new repositories in under 30 minutes with enterprise-grade safety and governance.
+F-Ops is a **local-first DevOps assistant** that provides AI-powered automation through **proposal-only safety**. It combines three specialized agents (Pipeline, Infrastructure, Monitoring) that generate complete DevOps setups through **reviewable PRs** with **dry-run validation**—never executing directly.
 
-## Tech Stack
-- **Language**: Python 3.11+ (currently using Python 3.13.5 via pyenv)
-- **Backend Framework**: FastAPI with Uvicorn ASGI server
-- **CLI Framework**: Typer with Rich for CLI interface
-- **AI/ML**: 
-  - LangChain/LangGraph for orchestration
-  - OpenAI/Anthropic APIs for LLM operations
-  - Chroma vector database for semantic search
-- **Database**: 
-  - SQLite for state management
-  - JSONL for audit logs
-  - Chroma for knowledge base embeddings
-- **Infrastructure**:
-  - Docker/Docker Compose for containerization
-  - Kubernetes Python client for K8s operations
-  - PyGithub for GitHub integration
-  - Boto3 for AWS operations
-- **Monitoring**: Prometheus and Grafana
+## Core Concept
+**Proposal-Only Architecture**: F-Ops generates CI/CD pipelines, infrastructure configs, and monitoring setups as **Pull/Merge Requests** with attached dry-run artifacts. All changes are reviewable before execution.
 
-## Project Structure
-```
-f-ops/
-├── backend/          # FastAPI backend server
-│   ├── app/         # Application code
-│   │   ├── api/     # API routes
-│   │   ├── core/    # Core functionality (agent, KB, audit)
-│   │   ├── models/  # Database models
-│   │   └── schemas/ # Pydantic schemas
-│   ├── audit_logs/  # Audit log storage
-│   └── chroma_db/   # Vector database storage
-├── cli/             # CLI application
-│   └── fops/        # CLI package
-│       ├── commands/# Sub-commands
-│       └── utils/   # Utilities
-├── mcp_packs/       # Model Context Protocol packs
-├── knowledge_base/  # KB documents and sources
-└── tests/           # Test files
+## Three-Agent System
+- **Pipeline Agent**: Generates CI/CD workflows (GitHub Actions/GitLab CI) with security scans and SLO gates
+- **Infrastructure Agent**: Creates Terraform modules and Helm charts with `terraform plan` and `helm --dry-run` validation
+- **Monitoring Agent**: Produces Prometheus rules and Grafana dashboards for observability
+
+## Key Features
+- **Safety First**: No direct execution - all operations generate PR/MR proposals only
+- **Dry-Run Validation**: Every generated config includes validation artifacts
+- **Knowledge Base**: Chroma vector database for RAG-powered template retrieval
+- **MCP Integration**: Custom Model Context Protocol servers for tool integration
+- **Multi-Interface**: CLI and Web UI access
+
+## Target Workflows
+1. `fops onboard --repo <url> --target k8s --env staging,prod` → Generates complete DevOps setup as 3 PRs
+2. `fops kb connect --uri <link>` / `fops kb search "<query>"` → Knowledge management
+3. Web UI modules for form-driven generation with preview
 
 ## Architecture
-- **Agent Core** (FastAPI): Handles planning, policy checks, approvals, and orchestration
-- **MCP Packs**: Modular connectors for GitHub, Kubernetes, AWS, and observability tools
-- **Knowledge Layer**: Chroma for semantic search with collections per project/tenant
-- **State Management**: SQLite for approvals/runs, JSONL for immutable audit trail
-
-## Development Phases
-Currently in Phase 1: Core infrastructure with CLI and basic MCP packs
-Next: Phase 2 with React Web UI and advanced deployment workflows
+- **Backend**: FastAPI with LangGraph agent orchestration
+- **Vector DB**: Chroma for semantic search and RAG
+- **State**: SQLite for minimal metadata, JSONL for audit
+- **Validation**: Native tools for syntax checking, dry-run execution
+- **Security**: Proposal-only, scoped tokens, allow-listed repos

@@ -1,141 +1,172 @@
-# Suggested Commands for F-Ops Development
+# F-Ops Development Commands
 
-## Running the Application
+## Quick Start (Recommended)
 
-### Backend Server
+### 1. Initial Setup
 ```bash
-# Using Docker Compose (recommended)
-docker-compose up -d
+# Clone and setup environment
+cp .env.example .env
+# Edit .env with your API keys
 
-# Or run directly with Python
-cd backend
-uvicorn app.main:app --reload --port 8000
-
-# For development with auto-reload
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Run setup script
+./setup.sh
 ```
 
-### CLI
+### 2. Running the Backend Server
+```bash
+# Option 1: Simple Python script (recommended for development)
+python run_backend.py
+
+# Option 2: Direct uvicorn command
+cd backend
+uvicorn app.main:app --host 127.0.0.1 --port 8002 --reload
+
+# Option 3: Using Docker Compose
+docker-compose up -d
+```
+
+### 3. Install CLI
+```bash
+cd cli
+pip install -e .
+fops --help
+```
+
+## Development Commands
+
+### Backend Development
+```bash
+# Start development server with hot reload
+cd backend
+uvicorn app.main:app --reload --port 8002
+
+# Alternative simplified server
+uvicorn app.main_simple:app --reload --port 8002
+
+# Run with custom Python path (if needed)
+PYTHONPATH=/path/to/f-ops:$PYTHONPATH uvicorn app.main:app --reload --port 8002
+```
+
+### CLI Development & Testing
 ```bash
 # Install CLI in development mode
 cd cli
 pip install -e .
 
-# Use CLI
+# Test CLI commands
 fops --help
-fops onboard --repo <url> --target k8s --env staging,prod
-fops deploy --service <name> --env <env>
-fops kb search "<query>"
-fops incident --service <name>
+fops version
+fops status
+fops init
+
+# Test onboarding (primary workflow)
+fops onboard --repo https://github.com/user/repo --target k8s --env staging,prod
+
+# Test knowledge base
+fops kb search "kubernetes deployment"
+fops kb connect --uri https://docs.example.com
 ```
 
-## Development Setup
+### Docker Development
 ```bash
-# Initial setup (run from project root)
-./setup.sh
-
-# Or manual setup
-python3 -m venv venv
-source venv/bin/activate
-pip install -r backend/requirements.txt
-pip install -e cli/
-```
-
-## Testing
-```bash
-# Run unit tests
-pytest tests/
-
-# Run with coverage
-pytest --cov=backend tests/
-
-# Run end-to-end tests
-python tests/test_e2e.py
-```
-
-## Code Quality
-```bash
-# Format code with ruff (available on system)
-ruff format backend/ cli/
-
-# Lint code
-ruff check backend/ cli/
-
-# Type checking (if mypy installed)
-mypy backend/
-```
-
-## Docker Operations
-```bash
-# Build and start all services
-docker-compose up --build
+# Start all services
+docker-compose up -d
 
 # View logs
 docker-compose logs -f backend
 
-# Stop services
+# Rebuild after changes
+docker-compose build backend
+docker-compose up -d backend
+
+# Stop all services
 docker-compose down
-
-# Clean up volumes
-docker-compose down -v
 ```
 
-## Git Operations
+## Testing
+
+### Basic Testing
 ```bash
-# Check status
-git status
+# Run E2E tests
+python tests/test_e2e.py
 
-# Stage changes
-git add .
-
-# Commit with descriptive message
-git commit -m "feat: add knowledge base search functionality"
-
-# Push to remote
-git push origin main
+# Test API endpoints manually
+curl http://localhost:8002/health
+curl http://localhost:8002/
 ```
 
-## System Utilities (macOS/Darwin)
+### API Testing
 ```bash
-# List files (macOS ls)
-ls -la
-
-# Find files
-find . -name "*.py" -type f
-
-# Search in files (using ripgrep if available, otherwise grep)
-rg "pattern" --type py
-grep -r "pattern" --include="*.py" .
-
-# Check Python environment
-python --version
-which python
-pyenv versions
-
-# Environment variables
-export FOPS_API_URL=http://localhost:8000
-source .env
-```
-
-## API Testing
-```bash
-# Health check
-curl http://localhost:8000/health
-
-# View API docs
-open http://localhost:8000/docs
+# Check API status
+curl http://localhost:8002/health
 
 # Test onboarding endpoint
-curl -X POST http://localhost:8000/api/onboard/repo \
+curl -X POST http://localhost:8002/api/onboard/repo \
   -H "Content-Type: application/json" \
-  -d '{"repo_url": "https://github.com/user/repo", "target": "k8s"}'
+  -d '{"repo_url": "https://github.com/test/repo", "target": "k8s"}'
 ```
 
-## Monitoring
+## Useful System Commands (macOS/Darwin)
+
+### File Operations
 ```bash
-# Access Prometheus
-open http://localhost:9090
+# List files (macOS)
+ls -la
+find . -name "*.py" -type f
+grep -r "pattern" . --include="*.py"
 
-# Access Grafana (admin/admin)
-open http://localhost:3000
+# Git operations
+git status
+git add .
+git commit -m "message"
+git push
 ```
+
+### Process Management
+```bash
+# Find running processes
+ps aux | grep uvicorn
+lsof -i :8002
+
+# Kill processes on port
+lsof -ti:8002 | xargs kill -9
+```
+
+### Environment Management
+```bash
+# Python virtual environment
+python3 -m venv venv
+source venv/bin/activate
+deactivate
+
+# Check Python version
+python3 --version
+which python3
+```
+
+## Project Structure Navigation
+```bash
+# Key directories to know
+backend/app/           # FastAPI application
+backend/app/core/      # Core business logic
+backend/app/api/routes/ # API endpoints
+cli/fops/commands/     # CLI command implementations
+mcp_packs/            # MCP server integrations
+knowledge_base/       # Chroma DB and knowledge management
+tests/                # Test files
+```
+
+## Configuration
+```bash
+# Environment setup
+cp .env.example .env
+# Edit .env file with your API keys and settings
+
+# CLI configuration
+fops init  # Interactive configuration setup
+```
+
+## API Documentation
+- **Development**: http://localhost:8002/docs (FastAPI auto-docs)
+- **Health Check**: http://localhost:8002/health
+- **API Root**: http://localhost:8002/
