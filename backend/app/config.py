@@ -1,49 +1,37 @@
 from pydantic_settings import BaseSettings
 from typing import List
-import os
 
 class Settings(BaseSettings):
-    # API Settings
-    API_V1_STR: str = "/api/v1"
+    # Core
     PROJECT_NAME: str = "F-Ops"
-    SERVER_HOST: str = "0.0.0.0"
-    SERVER_PORT: int = 8000
-    
-    # Database
+    API_V1_STR: str = "/api/v1"
+
+    # Local Storage (no Postgres)
     SQLITE_URL: str = "sqlite:///./fops.db"
     CHROMA_PERSIST_DIR: str = "./chroma_db"
-    
+    AUDIT_LOG_DIR: str = "./audit_logs"
+
+    # MCP Servers (local)
+    MCP_GITHUB_TOKEN: str = ""
+    MCP_GITLAB_TOKEN: str = ""
+
     # AI/ML
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     DEFAULT_MODEL: str = "gpt-4"
-    
+
     # Security
+    ALLOWED_REPOS: List[str] = []  # Allow-listed repos
+    SCOPED_NAMESPACES: List[str] = []
     SECRET_KEY: str = "your-secret-key-here-change-in-production"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    
-    # GitHub Integration
-    GITHUB_TOKEN: str = ""
-    
-    # Kubernetes
-    KUBECONFIG_PATH: str = os.path.expanduser("~/.kube/config")
-    
-    # AWS
-    AWS_ACCESS_KEY_ID: str = ""
-    AWS_SECRET_ACCESS_KEY: str = ""
-    AWS_REGION: str = "us-east-1"
-    
-    # Monitoring
-    PROMETHEUS_URL: str = "http://localhost:9090"
-    GRAFANA_URL: str = "http://localhost:3000"
-    
-    # CORS
+
+    # CORS (local-first)
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
-    
+
     model_config = {
         "env_file": ".env",
-        "case_sensitive": True
+        "case_sensitive": True,
+        "extra": "ignore"  # Ignore extra fields for Phase 1
     }
 
 settings = Settings()

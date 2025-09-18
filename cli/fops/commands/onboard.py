@@ -1,152 +1,133 @@
 import typer
-from typing import List, Optional
+from typing import List
 from enum import Enum
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich import print as rprint
 import httpx
-import time
+import os
 
 app = typer.Typer()
 console = Console()
 
-class DeploymentTarget(str, Enum):
+class Target(str, Enum):
     k8s = "k8s"
     serverless = "serverless"
     static = "static"
 
 @app.command()
-def repo(
-    repo_url: str = typer.Argument(..., help="Repository URL to onboard"),
-    target: DeploymentTarget = typer.Option(
-        DeploymentTarget.k8s, 
-        "--target", "-t",
-        help="Deployment target"
+def main(
+    repo: str = typer.Argument(..., help="Repository URL"),
+    target: Target = typer.Option(Target.k8s, "--target", "-t", help="Deployment target"),
+    env: List[str] = typer.Option(["staging", "prod"], "--env", "-e", help="Environments"),
+    api_url: str = typer.Option(
+        os.getenv("FOPS_API_URL", "http://localhost:8000"),
+        "--api-url",
+        help="F-Ops API URL"
     ),
-    environments: List[str] = typer.Option(
-        ["staging", "prod"], 
-        "--env", "-e",
-        help="Environments to setup"
-    ),
-    auto_detect: bool = typer.Option(
-        True, 
-        "--auto-detect",
-        help="Auto-detect technology stack"
-    ),
-    approve: bool = typer.Option(
-        False, 
-        "--approve",
-        help="Auto-approve the generated configuration"
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Run in dry-run mode"
-    )
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run", help="Dry run mode")
 ):
-    """
-    Onboard a new repository with zero-to-deploy setup
-    
-    Examples:
-        fops onboard repo https://github.com/user/repo --target k8s
-        fops onboard repo https://github.com/user/app --env dev,staging,prod
-    """
-    console.print(f"[bold blue]🚀 Onboarding repository:[/bold blue] {repo_url}")
-    console.print(f"Target: {target.value}")
-    console.print(f"Environments: {', '.join(environments)}")
-    
-    if dry_run:
-        console.print("[yellow]Running in dry-run mode[/yellow]")
-    
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        # Step 1: Clone and analyze repository
-        task = progress.add_task("Cloning and analyzing repository...", total=None)
-        time.sleep(2)  # Simulate work
-        progress.update(task, description="[green]✓[/green] Repository analyzed")
-        
-        # Step 2: Detect technology stack
-        if auto_detect:
-            task = progress.add_task("Detecting technology stack...", total=None)
-            time.sleep(1.5)
-            progress.update(task, description="[green]✓[/green] Detected: Python (FastAPI)")
-        
-        # Step 3: Generate CI/CD pipeline
-        task = progress.add_task("Generating CI/CD pipeline...", total=None)
-        time.sleep(2)
-        progress.update(task, description="[green]✓[/green] CI/CD pipeline generated")
-        
-        # Step 4: Create IaC templates
-        task = progress.add_task("Creating Infrastructure as Code templates...", total=None)
-        time.sleep(2)
-        progress.update(task, description="[green]✓[/green] IaC templates created")
-        
-        # Step 5: Setup environments
-        for env in environments:
-            task = progress.add_task(f"Setting up {env} environment...", total=None)
-            time.sleep(1)
-            progress.update(task, description=f"[green]✓[/green] {env} environment ready")
-        
-        # Step 6: Create PR
-        if not dry_run:
-            task = progress.add_task("Creating pull request...", total=None)
-            time.sleep(1.5)
-            progress.update(task, description="[green]✓[/green] Pull request created")
-    
-    # Show results
-    console.print("\n[bold green]✅ Onboarding complete![/bold green]")
-    
+    """Generate CI/CD pipeline and infrastructure configs (Phase 1: Pipeline only)"""
+
+    rprint("🚀 [bold blue]F-Ops Repository Onboarding[/bold blue]")
+    rprint(f"   Repository: [green]{repo}[/green]")
+    rprint(f"   Target: [yellow]{target.value}[/yellow]")
+    rprint(f"   Environments: [cyan]{', '.join(env)}[/cyan]")
+    rprint(f"   Mode: [magenta]{'Dry Run' if dry_run else 'Live'}[/magenta]")
+    rprint("")
+
     if not dry_run:
-        console.print("\n[bold]Generated artifacts:[/bold]")
-        console.print("  • .github/workflows/ci-cd.yml - CI/CD pipeline")
-        console.print("  • k8s/deployment.yaml - Kubernetes deployment")
-        console.print("  • k8s/service.yaml - Kubernetes service")
-        console.print("  • terraform/main.tf - Infrastructure configuration")
-        console.print("  • policies/deployment.rego - OPA policies")
-        console.print("\n[bold]Pull Request:[/bold] https://github.com/user/repo/pull/123")
-        
-        if not approve:
-            console.print("\n[yellow]Review and approve the PR to complete onboarding[/yellow]")
-    else:
-        console.print("\n[yellow]Dry-run complete. No changes were made.[/yellow]")
+        rprint("⚠️  [yellow]Live mode will create actual PRs![/yellow]")
+        if not typer.confirm("Continue?"):
+            raise typer.Exit()
+
+    try:
+        with console.status("[bold green]Generating CI/CD pipeline..."):
+            # Call Pipeline Agent
+            response = httpx.post(
+                f"{api_url}/api/pipeline/generate",
+                json={
+                    "repo_url": repo,
+                    "target": target.value,
+                    "environments": env
+                },
+                timeout=60.0
+            )
+
+        if response.status_code == 200:
+            result = response.json()
+
+            rprint("✅ [bold green]Pipeline generated successfully![/bold green]")
+            rprint(f"📝 **PR Created**: [link]{result['pr_url']}[/link]")
+            rprint(f"📁 **Pipeline File**: {result['pipeline_file']}")
+            rprint(f"🔍 **Validation**: {result['validation_status']}")
+            rprint(f"📚 **KB Citations**: {len(result['citations'])} sources")
+
+            rprint("\n📋 [bold]Citations:[/bold]")
+            for i, citation in enumerate(result['citations'], 1):
+                rprint(f"  {i}. {citation}")
+
+            rprint(f"\n🎯 [bold]Detected Stack:[/bold]")
+            stack = result['stack']
+            rprint(f"  Language: [green]{stack['language']}[/green]")
+            rprint(f"  Framework: [green]{stack['framework']}[/green]")
+
+            rprint("\n📌 [bold yellow]Next Steps:[/bold yellow]")
+            rprint("  1. Review the generated PR")
+            rprint("  2. Test the pipeline in your environment")
+            rprint("  3. Merge when ready")
+            rprint("  4. Infrastructure configs will be available in Phase 2")
+
+            return result
+
+        else:
+            error_detail = response.json().get("detail", response.text) if response.text else "Unknown error"
+            rprint(f"❌ [bold red]Error:[/bold red] {error_detail}")
+            raise typer.Exit(1)
+
+    except httpx.ConnectError:
+        rprint(f"❌ [bold red]Connection Error:[/bold red] Could not connect to F-Ops API at {api_url}")
+        rprint("   Make sure the F-Ops backend is running:")
+        rprint("   [dim]python run_backend.py[/dim]")
+        raise typer.Exit(1)
+    except httpx.TimeoutException:
+        rprint("❌ [bold red]Timeout:[/bold red] Pipeline generation took too long")
+        raise typer.Exit(1)
+    except Exception as e:
+        rprint(f"❌ [bold red]Unexpected Error:[/bold red] {e}")
+        raise typer.Exit(1)
 
 @app.command()
 def status(
-    repo_url: str = typer.Argument(..., help="Repository URL to check")
+    repo: str = typer.Argument(..., help="Repository URL"),
+    api_url: str = typer.Option(
+        os.getenv("FOPS_API_URL", "http://localhost:8000"),
+        "--api-url",
+        help="F-Ops API URL"
+    )
 ):
     """Check onboarding status for a repository"""
-    console.print(f"[bold]Checking onboarding status for:[/bold] {repo_url}")
-    
-    # Simulate API call
-    with console.status("Fetching status..."):
-        time.sleep(1)
-    
-    # Show status
-    console.print("\n[bold]Onboarding Status:[/bold]")
-    console.print("  Status: [green]Completed[/green]")
-    console.print("  Date: 2024-01-15")
-    console.print("  Environments: staging, prod")
-    console.print("  CI/CD: GitHub Actions")
-    console.print("  Infrastructure: Kubernetes")
-    console.print("  Last deployment: 2024-01-15 14:30 UTC")
+    try:
+        with console.status("[bold green]Checking repository status..."):
+            response = httpx.get(
+                f"{api_url}/api/pipeline/stack-analysis/{repo}",
+                timeout=30.0
+            )
 
-@app.command("list")
-def list_repos():
-    """List all onboarded repositories"""
-    console.print("[bold]Onboarded Repositories:[/bold]\n")
-    
-    # Simulate data
-    repos = [
-        {"name": "user/api-service", "status": "Active", "environments": "staging, prod"},
-        {"name": "user/web-app", "status": "Active", "environments": "dev, staging, prod"},
-        {"name": "user/data-processor", "status": "Inactive", "environments": "staging"},
-    ]
-    
-    for repo in repos:
-        status_color = "green" if repo["status"] == "Active" else "yellow"
-        console.print(f"  • {repo['name']}")
-        console.print(f"    Status: [{status_color}]{repo['status']}[/{status_color}]")
-        console.print(f"    Environments: {repo['environments']}\n")
+        if response.status_code == 200:
+            result = response.json()
+            stack = result["stack"]
+
+            rprint(f"📊 [bold]Repository Analysis:[/bold] {repo}")
+            rprint(f"  Language: [green]{stack['language']}[/green]")
+            rprint(f"  Framework: [green]{stack['framework']}[/green]")
+            rprint(f"  Package Manager: [green]{stack['package_manager']}[/green]")
+            rprint(f"  Has Tests: {'✅' if stack['has_tests'] else '❌'}")
+            rprint(f"  Supported: {'✅' if result['supported'] else '❌'}")
+
+        else:
+            rprint(f"❌ [bold red]Error:[/bold red] {response.text}")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        rprint(f"❌ [bold red]Error:[/bold red] {e}")
+        raise typer.Exit(1)

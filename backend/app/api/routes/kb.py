@@ -1,173 +1,104 @@
-from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel
-from app.core.knowledge_base import KnowledgeBase
-from app.core.audit import AuditLogger, AuditAction
+from fastapi import APIRouter, HTTPException
+from app.mcp_servers.mcp_kb import MCPKnowledgeBase
+from app.core.kb_manager import KnowledgeBaseManager
+from app.core.audit_logger import AuditLogger
+from app.schemas.pipeline import KBConnectRequest, KBConnectResponse, KBSearchRequest, KBSearchResponse
 import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Initialize services
-kb = KnowledgeBase()
-audit = AuditLogger()
+# Initialize components
+kb_manager = KnowledgeBaseManager()
+audit_logger = AuditLogger()
+mcp_kb = MCPKnowledgeBase(kb_manager, audit_logger)
 
-class ConnectRequest(BaseModel):
-    uri: str
-    source_type: Optional[str] = "auto"
-    sync: bool = False
-    metadata: Optional[Dict[str, Any]] = {}
-
-class SearchRequest(BaseModel):
-    query: str
-    collection: Optional[str] = None
-    limit: int = 5
-    filters: Optional[Dict[str, Any]] = None
-
-class DocumentRequest(BaseModel):
-    collection: str
-    content: str
-    metadata: Dict[str, Any] = {}
-
-@router.post("/connect")
-async def connect_knowledge_source(request: ConnectRequest):
-    """Connect a new knowledge source"""
+@router.post("/connect", response_model=KBConnectResponse)
+async def connect_knowledge_source(request: KBConnectRequest):
+    """Connect and ingest knowledge source"""
     try:
-        # Log the connection attempt
-        audit.log_action(
-            AuditAction.KB_CONNECTED,
-            user="api",
-            resource=request.uri,
-            details={"source_type": request.source_type, "sync": request.sync}
-        )
-        
-        # Here you would implement actual connector logic
-        # For now, return success
-        return {
-            "success": True,
-            "uri": request.uri,
-            "source_type": request.source_type,
-            "sync_enabled": request.sync,
-            "message": "Knowledge source connected successfully"
-        }
+        logger.info(f"KB connect requested for: {request.uri}")
+
+        result = await mcp_kb.connect(request.uri)
+
+        return KBConnectResponse(**result)
+
     except Exception as e:
-        logger.error(f"Failed to connect knowledge source: {e}")
+        logger.error(f"KB connect failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/search")
-async def search_knowledge(request: SearchRequest):
-    """Search the knowledge base"""
+@router.post("/search", response_model=KBSearchResponse)
+async def search_knowledge_base(request: KBSearchRequest):
+    """Search knowledge base"""
     try:
-        # Log the search
-        audit.log_action(
-            AuditAction.KB_SEARCHED,
-            user="api",
-            details={"query": request.query, "collection": request.collection}
-        )
-        
-        if request.collection:
-            results = kb.search(
-                collection=request.collection,
-                query=request.query,
-                k=request.limit,
-                filter_dict=request.filters
-            )
-        else:
-            results = kb.search_all(query=request.query, k=request.limit)
-        
-        return {
-            "success": True,
-            "query": request.query,
-            "results": results,
-            "count": len(results) if isinstance(results, list) else sum(len(v) for v in results.values())
-        }
-    except Exception as e:
-        logger.error(f"Search failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.info(f"KB search: '{request.query}' in {request.collections}")
 
-@router.post("/document")
-async def add_document(request: DocumentRequest):
-    """Add a document to the knowledge base"""
-    try:
-        doc_id = kb.add_document(
-            collection=request.collection,
-            document={
-                "content": request.content,
-                "metadata": request.metadata
-            }
+        results = mcp_kb.search(
+            query=request.query,
+            collections=request.collections
         )
-        
-        # Log the addition
-        audit.log_action(
-            AuditAction.KB_DOCUMENT_ADDED,
-            user="api",
-            resource=doc_id,
-            details={"collection": request.collection}
-        )
-        
-        return {
-            "success": True,
-            "document_id": doc_id,
-            "collection": request.collection
-        }
-    except Exception as e:
-        logger.error(f"Failed to add document: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/document/{collection}/{doc_id}")
-async def delete_document(collection: str, doc_id: str):
-    """Delete a document from the knowledge base"""
-    try:
-        success = kb.delete_document(collection, doc_id)
-        
-        if success:
-            # Log the deletion
-            audit.log_action(
-                AuditAction.KB_DOCUMENT_DELETED,
-                user="api",
-                resource=doc_id,
-                details={"collection": collection}
-            )
-        
-        return {
-            "success": success,
-            "document_id": doc_id,
-            "collection": collection
-        }
+        return KBSearchResponse(
+            query=request.query,
+            results=results,
+            count=len(results)
+        )
+
     except Exception as e:
-        logger.error(f"Failed to delete document: {e}")
+        logger.error(f"KB search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/stats")
-async def get_knowledge_stats(collection: Optional[str] = None):
+async def get_kb_stats():
     """Get knowledge base statistics"""
     try:
-        stats = kb.get_collection_stats(collection)
+        stats = kb_manager.get_collection_stats()
+
         return {
-            "success": True,
-            "stats": stats
+            "collections": stats,
+            "total_documents": sum(s["document_count"] for s in stats.values()),
+            "status": "operational"
         }
+
     except Exception as e:
-        logger.error(f"Failed to get stats: {e}")
+        logger.error(f"KB stats failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/sync")
-async def sync_knowledge_sources():
-    """Sync all connected knowledge sources"""
+@router.get("/health")
+async def kb_health():
+    """Check knowledge base health"""
     try:
-        # Log the sync
-        audit.log_action(
-            AuditAction.KB_SYNCED,
-            user="api",
-            details={"trigger": "manual"}
-        )
-        
-        # Here you would implement actual sync logic
+        stats = kb_manager.get_collection_stats()
+
         return {
-            "success": True,
-            "message": "Knowledge sources sync initiated",
-            "sources_synced": 0  # Would be actual count
+            "status": "healthy",
+            "collections_initialized": len(stats),
+            "chroma_status": "connected",
+            "components": {
+                "kb_manager": "ready",
+                "mcp_kb": "ready",
+                "audit_logger": "enabled"
+            }
         }
+
     except Exception as e:
-        logger.error(f"Sync failed: {e}")
+        logger.error(f"KB health check failed: {e}")
+        raise HTTPException(status_code=503, detail=f"KB service unhealthy: {e}")
+
+@router.post("/compose")
+async def compose_from_kb(template_type: str, context: dict):
+    """Compose content from KB patterns"""
+    try:
+        logger.info(f"KB compose requested: {template_type}")
+
+        composed_content = mcp_kb.compose(template_type, context)
+
+        return {
+            "template_type": template_type,
+            "content": composed_content,
+            "success": True
+        }
+
+    except Exception as e:
+        logger.error(f"KB compose failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
