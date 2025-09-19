@@ -212,6 +212,26 @@ async def intelligent_pipeline_generation(request: IntelligentPipelineRequest):
             use_analysis=request.use_analysis
         )
 
+        # Write pipeline file to GitHub Actions folder
+        if pipeline_result.get("success") and pipeline_result.get("pipeline_content"):
+            pipeline_file = pipeline_result.get("pipeline_file", "ci-cd-pipeline.yml")
+            pipeline_content = pipeline_result.get("pipeline_content")
+
+            # Create .github/workflows directory
+            workflows_dir = os.path.join(request.local_path, ".github", "workflows")
+            os.makedirs(workflows_dir, exist_ok=True)
+
+            # Write pipeline file
+            pipeline_path = os.path.join(workflows_dir, pipeline_file)
+            with open(pipeline_path, 'w', encoding='utf-8') as f:
+                f.write(pipeline_content)
+
+            logger.info(f"Pipeline file created: {pipeline_path}")
+
+            # Add file path to result
+            pipeline_result["pipeline_path"] = pipeline_path
+            pipeline_result["file_created"] = True
+
         # Log successful operation
         audit_logger.log_operation({
             "type": "intelligent_pipeline_generation",

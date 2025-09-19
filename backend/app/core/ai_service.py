@@ -718,13 +718,13 @@ Focus on accuracy and provide specific, actionable insights. Only respond with t
             # Search KB for each query (limit to avoid overload)
             for query in search_queries[:5]:  # Limit to 5 searches
                 try:
-                    search_results = kb_manager.search(
-                        query=query,
-                        collections=["kb.pipelines", "kb.docs"],
-                        limit=2
-                    )
+                    all_results = []
+                    # Search each collection separately since kb_manager.search takes single collection
+                    for collection in ["pipelines", "docs"]:
+                        collection_results = kb_manager.search(collection=collection, query=query, k=2)
+                        all_results.extend(collection_results)
 
-                    for result in search_results.get("results", []):
+                    for result in all_results:
                         source_info = f"KB: {result.get('metadata', {}).get('source', 'unknown')} - {query}"
                         if source_info not in rag_sources:
                             rag_sources.append(source_info)

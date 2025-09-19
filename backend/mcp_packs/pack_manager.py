@@ -11,6 +11,8 @@ Provides access to:
 import asyncio
 import json
 import logging
+import os
+import yaml
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import httpx
@@ -70,11 +72,240 @@ class MCPPackManager:
         self.audit_logger = audit_logger
         self.initialized_packs.add("kb")
 
-    def execute_action(self, pack_name: str, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def _execute_kb_action(self, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute KB-specific actions using kb_manager directly"""
+        try:
+            # Handle different actions
+            if action == "connect":
+                uri = params.get('uri')
+                if uri and uri.startswith('file://'):
+                    # Handle local file system path
+                    return await self._connect_local_files(uri)
+                else:
+                    return {"success": False, "error": "Only file:// URIs are supported currently"}
+            elif action == "search":
+                return self._kb_search(params)
+            elif action == "get_stats":
+                return self._kb_get_stats(params)
+            else:
+                return {"success": False, "error": f"Unknown KB action: {action}"}
+
+        except Exception as e:
+            logger.error(f"KB action {action} failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _kb_search(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Search knowledge base using kb_manager directly"""
+        query = params['query']
+        collections = params.get('collections', list(self.kb_manager.collections.keys()))
+        k = params.get('k', 5)
+
+        logger.info(f"Searching KB: '{query}' in {collections}")
+
+        try:
+            results = []
+            for collection_name in collections:
+                if collection_name in self.kb_manager.collections:
+                    collection_results = self.kb_manager.search(collection_name, query, k)
+                    results.extend(collection_results)
+
+            # Sort by relevance and limit results
+            results = results[:k]
+
+            logger.info(f"Found {len(results)} results for query: '{query}'")
+
+            return {
+                "success": True,
+                "query": query,
+                "results": results,
+                "count": len(results),
+                "collections_searched": collections
+            }
+
+        except Exception as e:
+            logger.error(f"KB search failed for query '{query}': {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "query": query
+            }
+
+    def _kb_get_stats(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Get knowledge base statistics using kb_manager directly"""
+        try:
+            stats = self.kb_manager.get_collection_stats()
+
+            return {
+                "success": True,
+                "collections": stats,
+                "total_documents": sum(s["document_count"] for s in stats.values()),
+                "status": "operational"
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to get KB stats: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _connect_local_files(self, file_uri: str) -> Dict[str, Any]:
+        """Connect and ingest local files from a directory"""
+        # Remove file:// prefix
+        local_path = file_uri.replace('file://', '')
+
+        if not os.path.exists(local_path):
+            return {"success": False, "error": f"Path does not exist: {local_path}"}
+
+        if not os.path.isdir(local_path):
+            return {"success": False, "error": f"Path is not a directory: {local_path}"}
+
+        documents_added = 0
+        collections_updated = set()
+
+        try:
+            logger.info(f"Starting to walk directory: {local_path}")
+            # Walk through all files in the directory
+            for root, dirs, files in os.walk(local_path):
+                logger.info(f"Processing directory: {root}, found {len(files)} files")
+                for file in files:
+                    # Skip system files
+                    if file.startswith('.'):
+                        logger.debug(f"Skipping system file: {file}")
+                        continue
+
+                    if file.endswith(('.yml', '.yaml', '.md', '.txt', '.json')) or 'jenkinsfile' in file.lower():
+                        logger.info(f"Processing file: {file}")
+                        file_path = os.path.join(root, file)
+
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+
+                            # Determine collection based on file type and content
+                            collection_name = self._determine_collection(file_path, content)
+
+                            # Create metadata
+                            metadata = {
+                                'source': 'local_file',
+                                'file_path': file_path,
+                                'filename': file,
+                                'type': self._get_file_type(file_path),
+                                'relative_path': os.path.relpath(file_path, local_path)
+                            }
+
+                            # Add framework/language detection for pipeline files
+                            if collection_name == 'pipelines':
+                                metadata.update(self._detect_pipeline_metadata(content, file))
+
+                            # Generate unique ID
+                            file_id = f"local-{hash(file_path)}"
+
+                            # Add to appropriate collection
+                            self.kb_manager.collections[collection_name].add(
+                                documents=[content],
+                                metadatas=[metadata],
+                                ids=[file_id]
+                            )
+
+                            documents_added += 1
+                            collections_updated.add(collection_name)
+
+                            logger.info(f"Added {file} to {collection_name} collection")
+
+                        except Exception as e:
+                            logger.warning(f"Failed to process {file_path}: {e}")
+                            continue
+
+            return {
+                "success": True,
+                "uri": file_uri,
+                "documents": documents_added,
+                "collections": list(collections_updated),
+                "source_type": "local_directory",
+                "note": f"Ingested {documents_added} files from {local_path}"
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to ingest local files from {local_path}: {e}")
+            return {"success": False, "error": str(e), "uri": file_uri}
+
+    def _determine_collection(self, file_path: str, content: str) -> str:
+        """Determine which collection a file should go into"""
+        filename = os.path.basename(file_path).lower()
+
+        # Pipeline files
+        if '.yml' in filename or '.yaml' in filename:
+            if any(keyword in content.lower() for keyword in ['workflow', 'pipeline', 'ci/cd', 'jobs:', 'stages:']):
+                return 'pipelines'
+
+        # Infrastructure files
+        if any(keyword in filename for keyword in ['terraform', 'helm', 'kubernetes', 'k8s', 'infra']):
+            return 'iac'
+
+        # Documentation files
+        if any(ext in filename for ext in ['.md', '.txt']) or 'readme' in filename:
+            return 'docs'
+
+        # Default to pipelines for YAML files, docs for others
+        if filename.endswith(('.yml', '.yaml')):
+            return 'pipelines'
+        else:
+            return 'docs'
+
+    def _get_file_type(self, file_path: str) -> str:
+        """Get file type based on extension"""
+        ext = os.path.splitext(file_path)[1].lower()
+        type_map = {
+            '.yml': 'yaml',
+            '.yaml': 'yaml',
+            '.md': 'markdown',
+            '.txt': 'text',
+            '.json': 'json'
+        }
+        return type_map.get(ext, 'unknown')
+
+    def _detect_pipeline_metadata(self, content: str, filename: str) -> dict:
+        """Detect pipeline-specific metadata"""
+        metadata = {}
+
+        # Detect CI platform
+        if 'github' in filename.lower() or 'workflow' in content.lower():
+            metadata['platform'] = 'github_actions'
+        elif 'gitlab' in filename.lower() or 'gitlab-ci' in filename.lower():
+            metadata['platform'] = 'gitlab_ci'
+        elif 'jenkins' in filename.lower() or 'jenkinsfile' in filename.lower():
+            metadata['platform'] = 'jenkins'
+        else:
+            metadata['platform'] = 'unknown'
+
+        # Detect languages/frameworks from content
+        content_lower = content.lower()
+        languages = []
+
+        if any(lang in content_lower for lang in ['python', 'pip', 'pytest', 'django']):
+            languages.append('python')
+        if any(lang in content_lower for lang in ['node', 'npm', 'yarn', 'javascript', 'typescript']):
+            languages.append('javascript')
+        if any(lang in content_lower for lang in ['java', 'maven', 'gradle']):
+            languages.append('java')
+        if any(lang in content_lower for lang in ['go', 'golang']):
+            languages.append('go')
+        if any(lang in content_lower for lang in ['docker', 'dockerfile']):
+            languages.append('docker')
+
+        if languages:
+            metadata['languages'] = languages
+
+        return metadata
+
+    async def execute_action(self, pack_name: str, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Execute an action on a specific MCP pack"""
         logger.info(f"Executing {action} on {pack_name} pack")
 
-        if pack_name == "github" and action == "create_pr":
+        if pack_name == "kb":
+            return await self._execute_kb_action(action, params)
+        elif pack_name == "github" and action == "create_pr":
             return self._simulate_github_pr_creation(params)
         elif pack_name == "gitlab" and action == "create_mr":
             return self._simulate_gitlab_mr_creation(params)
@@ -165,8 +396,6 @@ class MCPPackManager:
         This provides basic YAML validation for now.
         """
         try:
-            import yaml
-
             # Parse YAML to check syntax
             parsed = yaml.safe_load(content)
 

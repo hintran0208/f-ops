@@ -118,11 +118,10 @@ async function runAutoMode(options: any) {
 }
 
 async function runManualMode(options: any) {
-  console.log(chalk.blue.bold('📝 Manual Mode: RAG-Enhanced Guided Configuration'));
+  console.log(chalk.blue.bold('📝 Manual Mode: Guided Pipeline Configuration'));
   console.log('');
 
   const apiClient = new FopsApiClient(options.apiUrl);
-  const fileOps = new FileOperations('.');
 
   // Check backend health first
   const healthSpinner = ora('🏥 Checking F-Ops backend connection...').start();
@@ -142,87 +141,28 @@ async function runManualMode(options: any) {
     return;
   }
 
-  // Scan current project directory
-  const projectSpinner = ora('🔍 Scanning current project directory...').start();
+  // Simple project info display
+  console.log(chalk.cyan('\n📁 Current Project Information:'));
+  console.log(`  Directory: ${chalk.green(path.basename(process.cwd()))}`);
+  console.log(`  Path: ${chalk.gray(process.cwd())}`);
 
-  const scanner = new ProjectScanner('.');
-  const gitInfo = GitUtils.getGitInfo('.');
-  let repoUrl: string;
-  let localAnalysis: any;
-  let repoInfo: any;
-
-  try {
-    // Get local project analysis
-    localAnalysis = await scanner.scanProject();
-    projectSpinner.succeed('✅ Local project scan completed');
-
-    // Display project information
-    console.log(chalk.cyan('\n📁 Current Project Information:'));
-    console.log(`  Directory: ${chalk.green(path.basename(process.cwd()))}`);
-    console.log(`  Language: ${chalk.green(localAnalysis.language)}`);
-    console.log(`  Framework: ${chalk.green(localAnalysis.framework || 'Not detected')}`);
-    console.log(`  Git Repository: ${gitInfo.isGitRepo ? '✅ Yes' : '❌ No'}`);
-
-    if (gitInfo.isGitRepo) {
-      console.log(`  Remote URL: ${chalk.green(gitInfo.remoteUrl || 'Not configured')}`);
-      console.log(`  Current Branch: ${chalk.green(gitInfo.currentBranch || 'Unknown')}`);
-      console.log(`  Uncommitted Changes: ${gitInfo.hasUncommittedChanges ? '⚠️ Yes' : '✅ Clean'}`);
-    }
-
-    // Get repository information for API (includes local path for local repos)
-    repoInfo = GitUtils.getRepositoryInfo('.');
-    repoUrl = options.repo || repoInfo.repoUrl;
-  } catch (error) {
-    projectSpinner.fail('❌ Failed to scan project directory');
-    console.error(chalk.red('Error:'), error);
-    return;
-  }
-
-  // Analyze repository using AI (combining local and remote analysis)
-  const analysisSpinner = ora('🧠 Enhancing local analysis with AI for guided recommendations...').start();
-
-  let stackAnalysis;
-  try {
-    stackAnalysis = await apiClient.analyzeRepositoryStack(repoUrl);
-    analysisSpinner.succeed('✅ AI-powered repository analysis completed');
-
-    // Display simplified AI tech stack analysis
-    const stack = stackAnalysis.stack;
-    console.log(chalk.green.bold('\n🧠 AI Tech Stack Analysis'));
-    console.log(`  Language: ${chalk.green(stack.language || localAnalysis.language || 'Unknown')}`);
-    console.log(`  Framework: ${chalk.green(stack.framework || localAnalysis.framework || 'None detected')}`);
-    console.log(`  Build System: ${chalk.green(stack.build_system || 'Standard')}`);
-    console.log(`  Tests: ${stack.has_tests ? '✅' : '❌'} | Docker: ${stack.has_docker ? '✅' : '❌'} | Cloud Ready: ${stack.cloud_ready ? '✅' : '⚠️'}`);
-    console.log(`  Recommended Target: ${chalk.yellow(stack.recommended_target || 'k8s')}`);
-
-    // Guided questionnaire with AI-enhanced defaults
-    console.log(chalk.yellow.bold('\n📝 AI-Enhanced Guided Configuration'));
-    console.log('Note: Defaults are AI-recommended based on local + remote analysis');
-    console.log('');
-  } catch (error) {
-    analysisSpinner.fail('⚠️ AI analysis failed, proceeding with local analysis only');
-    console.log(chalk.yellow('Note: Using local project scan results for configuration'));
-    stackAnalysis = {
-      stack: {
-        language: localAnalysis.language,
-        framework: localAnalysis.framework,
-        recommended_target: 'k8s'
-      }
-    };
-  }
+  // Guided questionnaire for deployment configuration
+  console.log(chalk.yellow.bold('\n📝 Deployment Configuration'));
+  console.log('Please answer the following questions to configure your CI/CD pipeline:');
+  console.log('');
 
   const answers = await inquirer.prompt([
     {
       type: 'input',
       name: 'projectName',
       message: 'Project name:',
-      default: (stackAnalysis.stack as any)?.project_name || path.basename(process.cwd()),
+      default: path.basename(process.cwd()),
       validate: (input) => input.trim().length > 0 || 'Project name cannot be empty'
     },
     {
       type: 'list',
       name: 'target',
-      message: 'Choose deployment target (AI-recommended shown first):',
+      message: 'Choose deployment target:',
       choices: [
         {
           name: '☸️  Kubernetes (k8s) - Container orchestration platform',
@@ -240,7 +180,7 @@ async function runManualMode(options: any) {
           short: 'Static'
         }
       ],
-      default: (stackAnalysis.stack as any)?.recommended_target || 'k8s'
+      default: 'k8s'
     },
     {
       type: 'checkbox',
@@ -253,25 +193,42 @@ async function runManualMode(options: any) {
         { name: 'testing (test)', value: 'test', checked: false }
       ],
       validate: (input) => input.length > 0 || 'Please select at least one environment'
+    },
+    {
+      type: 'confirm',
+      name: 'includeTests',
+      message: 'Include automated testing in pipeline?',
+      default: true
+    },
+    {
+      type: 'confirm',
+      name: 'includeSecurity',
+      message: 'Include security scanning?',
+      default: true
+    },
+    {
+      type: 'list',
+      name: 'buildTool',
+      message: 'Preferred build tool/approach:',
+      choices: [
+        { name: 'Docker - Containerized builds', value: 'docker' },
+        { name: 'Native - Use language-specific tools', value: 'native' },
+        { name: 'Auto-detect - Let AI choose best approach', value: 'auto' }
+      ],
+      default: 'auto'
     }
   ]);
 
   // Display final configuration for review
-  console.log(chalk.green.bold('\n📋 AI-Enhanced Pipeline Configuration'));
+  console.log(chalk.green.bold('\n📋 Manual Pipeline Configuration'));
   console.log('');
   console.log(chalk.cyan('🏗️  Project Settings'));
-  console.log(`  Repository: ${chalk.green(repoUrl)}`);
   console.log(`  Project Name: ${chalk.green(answers.projectName)}`);
   console.log(`  Deployment Target: ${chalk.yellow(answers.target)}`);
   console.log(`  Environments: ${chalk.cyan(answers.environments.join(' → '))}`);
-  console.log(`  AI Analysis: ${chalk.green('Enhanced with knowledge base insights')}`);
-
-  if ((stackAnalysis.stack as any)?.language) {
-    console.log(chalk.cyan('\n🧠 AI-Detected Stack'));
-    console.log(`  Language: ${chalk.green((stackAnalysis.stack as any).language)}`);
-    console.log(`  Framework: ${chalk.green((stackAnalysis.stack as any).framework || 'Detected')}`);
-    console.log(`  Build System: ${chalk.green((stackAnalysis.stack as any).build_system || 'Configured')}`);
-  }
+  console.log(`  Testing: ${answers.includeTests ? '✅ Enabled' : '❌ Disabled'}`);
+  console.log(`  Security Scanning: ${answers.includeSecurity ? '✅ Enabled' : '❌ Disabled'}`);
+  console.log(`  Build Approach: ${chalk.green(answers.buildTool)}`);
 
   // Confirm generation
   if (!options.dryRun) {
@@ -280,7 +237,7 @@ async function runManualMode(options: any) {
       {
         type: 'confirm',
         name: 'proceed',
-        message: 'Generate AI-powered CI/CD pipeline with knowledge base insights?',
+        message: 'Generate CI/CD pipeline with these settings?',
         default: true
       }
     ]);
@@ -291,54 +248,52 @@ async function runManualMode(options: any) {
     }
   }
 
-  // Generate pipeline using RAG-powered AI
-  const pipelineSpinner = ora('🧠 Generating AI-powered pipeline with guided configuration...').start();
+  // Generate pipeline using manual configuration (no AI analysis)
+  const pipelineSpinner = ora('🔧 Generating pipeline with your configuration...').start();
 
   try {
-    const pipelineRequest: any = {
-      repo_url: repoUrl,
+    const intelligentRequest = {
+      local_path: process.cwd(),
       target: answers.target,
-      environments: answers.environments
+      environments: answers.environments,
+      use_analysis: false  // Manual mode doesn't use AI analysis
     };
 
-    // Add local path for local repositories
-    const currentRepoInfo = GitUtils.getRepositoryInfo('.');
-    if (currentRepoInfo.localPath) {
-      pipelineRequest.local_path = currentRepoInfo.localPath;
-    }
-
     if (options.dryRun) {
-      pipelineSpinner.succeed('✅ AI pipeline generation simulated (dry-run mode)');
-      console.log(chalk.blue('\n🔄 [DRY-RUN] Manual mode AI pipeline preview:'));
-      console.log(`  📄 Repository: ${repoUrl}`);
+      pipelineSpinner.succeed('✅ Pipeline generation simulated (dry-run mode)');
+      console.log(chalk.blue('\n🔄 [DRY-RUN] Manual mode pipeline preview:'));
+      console.log(`  📄 Directory: ${process.cwd()}`);
       console.log(`  🎯 Target: ${answers.target}`);
       console.log(`  🌍 Environments: ${answers.environments.join(', ')}`);
-      console.log('  🧠 Would use RAG knowledge base for guided best practices');
-      console.log('  📋 Would create PR with customized CI/CD pipeline');
+      console.log(`  🧪 Testing: ${answers.includeTests ? 'Enabled' : 'Disabled'}`);
+      console.log(`  🔒 Security: ${answers.includeSecurity ? 'Enabled' : 'Disabled'}`);
+      console.log(`  🔧 Build: ${answers.buildTool}`);
+      console.log('  📋 Would create pipeline file based on your preferences');
     } else {
-      const pipelineResult = await apiClient.generatePipeline(pipelineRequest);
+      const pipelineResult = await apiClient.generateIntelligentPipeline(intelligentRequest);
 
-      pipelineSpinner.succeed('✅ AI-powered guided pipeline generated and PR created!');
+      pipelineSpinner.succeed('✅ Manual pipeline generated and file created!');
 
-      console.log(chalk.green.bold('\n🎉 Guided Pipeline Generation Successful!'));
+      console.log(chalk.green.bold('\n🎉 Manual Pipeline Generation Successful!'));
       console.log('');
       console.log(chalk.cyan('📋 Generation Details:'));
-      console.log(`  Configuration: ${chalk.green('Manual guided + AI enhanced')}`);
+      console.log(`  Configuration: ${chalk.green('Manual guided configuration')}`);
       console.log(`  Pipeline File: ${chalk.green(pipelineResult.pipeline_file)}`);
       console.log(`  Validation Status: ${chalk.green(pipelineResult.validation_status)}`);
-      console.log(`  Pull Request: ${chalk.blue(pipelineResult.pr_url)}`);
+      console.log(`  File Location: ${chalk.cyan('.github/workflows/' + pipelineResult.pipeline_file)}`);
 
-      if (pipelineResult.citations && pipelineResult.citations.length > 0) {
-        console.log(chalk.cyan('\n📚 Knowledge Base Sources Applied:'));
-        pipelineResult.citations.forEach((citation, index) => {
-          console.log(`  ${index + 1}. ${chalk.gray(citation)}`);
+      if (pipelineResult.rag_sources && pipelineResult.rag_sources.length > 0) {
+        console.log(chalk.cyan('\n📚 Knowledge Base Sources Used:'));
+        pipelineResult.rag_sources.forEach((source, index) => {
+          console.log(`  ${index + 1}. ${chalk.gray(source)}`);
         });
       }
 
-      console.log(chalk.cyan('\n🔍 Final Stack Configuration:'));
-      console.log(`  Language: ${chalk.green(pipelineResult.stack?.language || 'AI-optimized')}`);
-      console.log(`  Framework: ${chalk.green(pipelineResult.stack?.framework || 'AI-configured')}`);
-      console.log(`  Deployment: ${chalk.green(answers.target)}`);
+      console.log(chalk.cyan('\n🔍 Pipeline Configuration Applied:'));
+      console.log(`  Deployment Target: ${chalk.green(answers.target)}`);
+      console.log(`  Environments: ${chalk.green(answers.environments.join(', '))}`);
+      console.log(`  Testing: ${answers.includeTests ? '✅ Included' : '❌ Skipped'}`);
+      console.log(`  Security: ${answers.includeSecurity ? '✅ Included' : '❌ Skipped'}`);
     }
 
     // Show next steps
@@ -347,26 +302,25 @@ async function runManualMode(options: any) {
       console.log('  1. 🚀 Run without --dry-run to generate actual pipeline');
       console.log('  2. 🏥 Ensure F-Ops backend is running');
     } else {
-      console.log('  1. 📋 Review the generated PR and guided configuration');
-      console.log('  2. 🔧 All your manual preferences have been incorporated');
-      console.log('  3. ✅ Approve and merge the PR to activate the pipeline');
+      console.log('  1. 📋 Review the generated pipeline file in .github/workflows/');
+      console.log('  2. 🔧 Your manual preferences have been applied');
+      console.log('  3. ✅ Commit and push the file to activate the pipeline');
       console.log('  4. 🔐 Configure required secrets based on your selections');
-      console.log('  5. 🚀 Push code changes to trigger the AI-optimized pipeline');
     }
 
     // Provide target-specific guidance
     if (answers.target === 'k8s') {
-      console.log(chalk.blue('\n💡 Kubernetes deployment guidance included in generated PR'));
+      console.log(chalk.blue('\n💡 Kubernetes deployment configuration included'));
     } else if (answers.target === 'serverless') {
-      console.log(chalk.blue('\n💡 Serverless deployment patterns included in generated PR'));
+      console.log(chalk.blue('\n💡 Serverless deployment patterns included'));
     } else if (answers.target === 'static') {
-      console.log(chalk.blue('\n💡 Static site deployment configuration included in generated PR'));
+      console.log(chalk.blue('\n💡 Static site deployment configuration included'));
     }
 
-    console.log(chalk.green.bold('\n🎉 RAG-enhanced manual mode completed successfully!'));
+    console.log(chalk.green.bold('\n🎉 Manual mode completed successfully!'));
 
   } catch (error) {
-    pipelineSpinner.fail('❌ Failed to generate AI-powered guided pipeline');
+    pipelineSpinner.fail('❌ Failed to generate manual pipeline');
     console.error(chalk.red('Error:'), error);
     throw error;
   }

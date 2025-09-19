@@ -35,7 +35,7 @@ async def search_knowledge_base(request: KBSearchRequest):
     try:
         logger.info(f"KB search: '{request.query}' in {request.collections}")
 
-        search_result = pack_manager.execute_action('kb', 'search', {
+        search_result = await pack_manager.execute_action('kb', 'search', {
             'query': request.query,
             'collections': request.collections
         })
@@ -95,7 +95,7 @@ async def compose_from_kb(template_type: str, context: dict):
     try:
         logger.info(f"KB compose requested: {template_type}")
 
-        compose_result = pack_manager.execute_action('kb', 'compose', {
+        compose_result = await pack_manager.execute_action('kb', 'compose', {
             'template_type': template_type,
             'context': context
         })
