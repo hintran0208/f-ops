@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import yaml
 import json
 import tempfile
@@ -7,59 +7,116 @@ import os
 from app.core.kb_manager import KnowledgeBaseManager
 from app.core.citation_engine import CitationEngine
 from app.core.audit_logger import AuditLogger
+from app.core.ai_service import AIService
 import logging
 
 logger = logging.getLogger(__name__)
 
 class PipelineAgent:
-    """Pipeline Agent for generating CI/CD pipelines with KB citations"""
+    """Pipeline Agent for generating CI/CD pipelines with AI and KB citations"""
 
     def __init__(self, kb_manager: KnowledgeBaseManager, audit_logger: AuditLogger):
         self.kb = kb_manager
         self.citation_engine = CitationEngine(kb_manager)
         self.audit_logger = audit_logger
+        self.ai_service = AIService()
 
-    def analyze_repository(self, repo_url: str) -> Dict[str, Any]:
-        """Detect stack and frameworks from repository"""
-        logger.info(f"Analyzing repository: {repo_url}")
+    def analyze_repository(self, repo_url: str, local_path: Optional[str] = None) -> Dict[str, Any]:
+        """Detect stack and frameworks from repository using AI"""
+        logger.info(f"AI analyzing repository: {repo_url}")
 
-        # For Phase 1, we'll do basic detection
-        # TODO: In future phases, implement actual repo cloning and analysis
+        try:
+            # Use AI service for intelligent analysis
+            analysis_result = self.ai_service.analyze_repository_stack(repo_url, local_path)
+            stack = analysis_result.get("stack", {})
 
-        stack = {
-            "language": "python",  # Default detection
-            "framework": "fastapi",
-            "has_dockerfile": False,
-            "has_tests": True,
-            "package_manager": "pip"
-        }
+            self.audit_logger.log_agent_decision("pipeline", {
+                "action": "ai_stack_analysis",
+                "repo_url": repo_url,
+                "detected_stack": stack,
+                "analysis_source": analysis_result.get("analysis_source", "ai_powered"),
+                "reasoning": "AI-powered repository analysis with file scanning"
+            })
 
-        # Simple heuristics based on repo URL
-        if "node" in repo_url.lower() or "js" in repo_url.lower():
-            stack.update({"language": "javascript", "framework": "express", "package_manager": "npm"})
-        elif "go" in repo_url.lower():
-            stack.update({"language": "go", "framework": "gin", "package_manager": "go"})
+            return stack
 
-        self.audit_logger.log_agent_decision("pipeline", {
-            "action": "stack_analysis",
-            "repo_url": repo_url,
-            "detected_stack": stack,
-            "reasoning": "Basic URL-based detection for Phase 1"
-        })
+        except Exception as e:
+            logger.error(f"AI analysis failed, using fallback: {e}")
 
-        return stack
+            # Fallback to basic heuristics
+            stack = {
+                "language": "python",
+                "framework": "fastapi",
+                "has_dockerfile": False,
+                "has_tests": True,
+                "package_manager": "pip",
+                "build_system": "pip",
+                "cloud_ready": True,
+                "recommended_target": "k8s"
+            }
+
+            # Simple heuristics based on repo URL
+            if "node" in repo_url.lower() or "js" in repo_url.lower():
+                stack.update({
+                    "language": "javascript",
+                    "framework": "express",
+                    "package_manager": "npm",
+                    "build_system": "npm"
+                })
+            elif "go" in repo_url.lower():
+                stack.update({
+                    "language": "go",
+                    "framework": "gin",
+                    "package_manager": "go",
+                    "build_system": "go"
+                })
+
+            self.audit_logger.log_agent_decision("pipeline", {
+                "action": "fallback_stack_analysis",
+                "repo_url": repo_url,
+                "detected_stack": stack,
+                "reasoning": "Fallback heuristic analysis - AI unavailable",
+                "error": str(e)
+            })
+
+            return stack
 
     def generate_pipeline(self,
                          repo_url: str,
                          stack: Dict,
-                         target: str,
-                         environments: List[str]) -> Dict[str, Any]:
-        """Generate CI/CD pipeline with citations"""
+                         target: Optional[str] = None,
+                         environments: Optional[List[str]] = None,
+                         mode: str = "guided") -> Dict[str, Any]:
+        """Generate CI/CD pipeline with AI and citations"""
 
-        logger.info(f"Generating pipeline for {stack['language']} targeting {target}")
+        logger.info(f"Generating pipeline for {stack.get('language')} using mode: {mode}")
+
+        try:
+            # Use AI for pipeline generation
+            ai_result = self.ai_service.generate_pipeline_with_ai(
+                repo_url=repo_url,
+                stack=stack,
+                target=target,
+                environments=environments,
+                mode=mode
+            )
+
+            # Extract AI decisions
+            final_target = ai_result.get("target", target or "k8s")
+            final_environments = ai_result.get("environments", environments or ["staging", "prod"])
+            ai_pipeline_content = ai_result.get("pipeline", "")
+
+            logger.info(f"AI generated pipeline for {final_target} with environments: {final_environments}")
+
+        except Exception as e:
+            logger.error(f"AI pipeline generation failed: {e}")
+            # Fallback to template generation
+            final_target = target or "k8s"
+            final_environments = environments or ["staging", "prod"]
+            ai_pipeline_content = ""
 
         # 1. Search KB for similar pipelines
-        search_query = f"{stack['language']} {target} CI/CD pipeline {stack.get('framework', '')}"
+        search_query = f"{stack.get('language')} {final_target} CI/CD pipeline {stack.get('framework', '')}"
         similar_pipelines = self.kb.search(
             collection='pipelines',
             query=search_query,
@@ -71,25 +128,37 @@ class PipelineAgent:
             query=search_query,
             collection='pipelines',
             results_count=len(similar_pipelines),
-            citations=[p['citation'] for p in similar_pipelines]
+            citations=[p.get('citation', 'KB source') for p in similar_pipelines]
         )
 
-        # 2. Generate pipeline based on platform
-        if "github.com" in repo_url:
-            pipeline_content = self._generate_github_actions(stack, target, environments)
-            pipeline_file = ".github/workflows/pipeline.yml"
+        # 2. Generate final pipeline content
+        if ai_pipeline_content:
+            # Use AI-generated content
+            pipeline_content = ai_pipeline_content
+            generation_method = "ai_generated"
         else:
-            pipeline_content = self._generate_gitlab_ci(stack, target, environments)
+            # Fallback to template generation
+            if "github.com" in repo_url or "local" in repo_url:
+                pipeline_content = self._generate_github_actions(stack, final_target, final_environments)
+            else:
+                pipeline_content = self._generate_gitlab_ci(stack, final_target, final_environments)
+            generation_method = "template_generated"
+
+        # 3. Determine pipeline file based on platform
+        if "gitlab.com" in repo_url:
             pipeline_file = ".gitlab-ci.yml"
+        else:
+            # Default to GitHub Actions for local repos and GitHub
+            pipeline_file = ".github/workflows/pipeline.yml"
 
-        # 3. Add security scans and SLO gates
+        # 4. Add security scans and SLO gates
         pipeline_content = self._add_security_gates(pipeline_content, stack)
-        pipeline_content = self._add_slo_gates(pipeline_content, target)
+        pipeline_content = self._add_slo_gates(pipeline_content, final_target)
 
-        # 4. Validate syntax
+        # 5. Validate syntax
         validation_result = self._validate_yaml(pipeline_content)
 
-        # 5. Add citations
+        # 6. Add citations from KB
         pipeline_with_citations = self.citation_engine.generate_citations(
             pipeline_content,
             similar_pipelines
@@ -98,19 +167,24 @@ class PipelineAgent:
         result = {
             "pipeline": pipeline_with_citations,
             "pipeline_file": pipeline_file,
-            "citations": [s['citation'] for s in similar_pipelines],
+            "citations": [s.get('citation', 'KB source') for s in similar_pipelines],
             "validation": validation_result,
             "stack": stack,
-            "target": target,
-            "environments": environments
+            "target": final_target,
+            "environments": final_environments,
+            "generation_method": generation_method,
+            "mode": mode
         }
 
         # Log pipeline generation
         self.audit_logger.log_agent_decision("pipeline", {
-            "action": "pipeline_generation",
+            "action": "ai_pipeline_generation",
             "repo_url": repo_url,
             "stack": stack,
-            "target": target,
+            "target": final_target,
+            "environments": final_environments,
+            "mode": mode,
+            "generation_method": generation_method,
             "validation_status": validation_result["status"],
             "citations_count": len(similar_pipelines)
         })
