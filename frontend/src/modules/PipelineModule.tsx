@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
@@ -14,10 +14,15 @@ import {
   FolderOpenIcon,
   DocumentDuplicateIcon,
   PencilIcon,
-  CheckIcon
+  CheckIcon,
+  ArrowPathIcon,
+  TrashIcon
 } from '@heroicons/react/24/outline'
 import { pipelineApi } from '../services/api'
 import LoadingSpinner from '../components/LoadingSpinner'
+import CodeEditor from '../components/CodeEditor'
+import { usePersistence } from '../hooks/usePersistence'
+import { useToast } from '../components/Toast'
 
 interface PipelineFormData {
   repo_url: string
@@ -48,7 +53,10 @@ export default function PipelineModule() {
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [editingFile, setEditingFile] = useState<string | null>(null)
   const [editedContent, setEditedContent] = useState<string>('')
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const persistence = usePersistence()
+  const { showToast, ToastContainer } = useToast()
 
   const { register, handleSubmit, watch, formState: { errors } } = useForm<PipelineFormData>({
     defaultValues: {
@@ -78,7 +86,12 @@ export default function PipelineModule() {
       org_standards: data.org_standards
     }),
     onSuccess: (response) => {
+      console.log('Pipeline generation response:', response)
       setResult(response)
+      showToast('Pipeline generated successfully!', 'success')
+    },
+    onError: (error: any) => {
+      showToast(`Pipeline generation failed: ${error.message}`, 'error')
     }
   })
 
@@ -87,6 +100,10 @@ export default function PipelineModule() {
     mutationFn: (data: any) => pipelineApi.createPR(data),
     onSuccess: (response) => {
       setResult(prev => prev ? { ...prev, pr_url: response.pr_url } : null)
+      showToast('PR created successfully!', 'success')
+    },
+    onError: (error: any) => {
+      showToast(`PR creation failed: ${error.message}`, 'error')
     }
   })
 
@@ -95,6 +112,10 @@ export default function PipelineModule() {
     mutationFn: (files: FileList) => pipelineApi.uploadFiles(files),
     onSuccess: (response) => {
       setUploadedFiles(response.files)
+      showToast(`Successfully uploaded ${response.files.length} files`, 'success')
+    },
+    onError: (error: any) => {
+      showToast(`Upload failed: ${error.message}`, 'error')
     }
   })
 
@@ -105,6 +126,10 @@ export default function PipelineModule() {
     onSuccess: () => {
       setEditingFile(null)
       setEditedContent('')
+      showToast('File saved successfully', 'success')
+    },
+    onError: (error: any) => {
+      showToast(`Save failed: ${error.message}`, 'error')
     }
   })
 
@@ -136,8 +161,10 @@ export default function PipelineModule() {
   }
 
   const handleEditFile = (filePath: string, content: string) => {
+    // Check if there's existing content to restore
+    const savedContent = persistence.loadFileContent(filePath)
     setEditingFile(filePath)
-    setEditedContent(content)
+    setEditedContent(savedContent || content)
   }
 
   const handleSaveFile = () => {
@@ -146,23 +173,132 @@ export default function PipelineModule() {
         file_path: editingFile,
         content: editedContent
       })
+      // Clear the saved content after successful save
+      persistence.clearFileContent(editingFile)
+      setHasUnsavedChanges(false)
     }
   }
 
-  const handleCopyFile = (content: string) => {
-    navigator.clipboard.writeText(content)
+  const handleContentChange = (content: string) => {
+    setEditedContent(content)
+    setHasUnsavedChanges(true)
+  }
+
+  const handleCancelEdit = () => {
+    if (hasUnsavedChanges) {
+      if (window.confirm('You have unsaved changes. Discard them?')) {
+        if (editingFile) {
+          persistence.clearFileContent(editingFile)
+        }
+        setEditingFile(null)
+        setEditedContent('')
+        setHasUnsavedChanges(false)
+      }
+    } else {
+      setEditingFile(null)
+      setEditedContent('')
+    }
+  }
+
+  const handleCopyFile = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content)
+      showToast('Content copied to clipboard', 'success')
+    } catch (error) {
+      console.error('Failed to copy:', error)
+      showToast('Failed to copy content', 'error')
+    }
+  }
+
+  // Persistence and auto-save
+  useEffect(() => {
+    // Load saved state on mount
+    const saved = persistence.loadState()
+    if (saved) {
+      if (saved.result) setResult(saved.result)
+      if (saved.uploadedFiles) setUploadedFiles(saved.uploadedFiles)
+      if (saved.editingFile) setEditingFile(saved.editingFile)
+      if (saved.editedContent) setEditedContent(saved.editedContent)
+      setShowFilePreview(Boolean(saved.result?.pipeline_files))
+    }
+  }, []) // Empty dependency array - only run once on mount
+
+  // Auto-save state changes
+  useEffect(() => {
+    const cleanup = persistence.autoSave({
+      result,
+      uploadedFiles,
+      editingFile,
+      editedContent,
+      formData: watch()
+    })
+    return cleanup
+  }, [result, uploadedFiles, editingFile, editedContent]) // Removed persistence and watch from dependencies
+
+  // Save file content separately for recovery
+  useEffect(() => {
+    if (editingFile && editedContent) {
+      persistence.saveFileContent(editingFile, editedContent)
+      setHasUnsavedChanges(true)
+    }
+  }, [editingFile, editedContent, persistence])
+
+  // Warn about unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault()
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?'
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [hasUnsavedChanges])
+
+  const handleClearData = () => {
+    if (window.confirm('This will clear all data including unsaved changes. Continue?')) {
+      persistence.clearState()
+      setResult(null)
+      setUploadedFiles([])
+      setEditingFile(null)
+      setEditedContent('')
+      setHasUnsavedChanges(false)
+      setShowFilePreview(false)
+    }
   }
 
   return (
-    <div className="px-4 sm:px-0">
+    <>
+      <ToastContainer />
+      <div className="px-4 sm:px-0">
       <div className="mb-8">
-        <div className="flex items-center">
-          <RocketLaunchIcon className="h-8 w-8 text-f-ops-600 mr-3" />
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Pipeline Agent</h1>
-            <p className="mt-2 text-gray-600">
-              Generate CI/CD pipelines with security scans and SLO gates
-            </p>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center">
+            <RocketLaunchIcon className="h-8 w-8 text-f-ops-600 mr-3" />
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Pipeline Agent</h1>
+              <p className="mt-2 text-gray-600">
+                Generate CI/CD pipelines with security scans and SLO gates
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            {hasUnsavedChanges && (
+              <div className="flex items-center text-amber-600 text-sm">
+                <ArrowPathIcon className="w-4 h-4 mr-1" />
+                Auto-saving...
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleClearData}
+              className="btn-secondary text-sm py-1 px-3 flex items-center"
+              title="Clear all data"
+            >
+              <TrashIcon className="w-4 h-4 mr-1" />
+              Clear
+            </button>
           </div>
         </div>
       </div>
@@ -427,7 +563,12 @@ export default function PipelineModule() {
                 {/* File Preview Toggle */}
                 <div className="mt-4">
                   <button
-                    onClick={() => setShowFilePreview(!showFilePreview)}
+                    type="button"
+                    onClick={() => {
+                      console.log('Toggle clicked, current state:', showFilePreview)
+                      console.log('Pipeline files:', result.pipeline_files)
+                      setShowFilePreview(!showFilePreview)
+                    }}
                     className="btn-secondary"
                   >
                     <EyeIcon className="w-4 h-4 mr-2" />
@@ -437,14 +578,14 @@ export default function PipelineModule() {
               </div>
 
               {/* File Preview with Edit/Copy */}
-              {showFilePreview && result.pipeline_files && (
+              {showFilePreview && result?.pipeline_files ? (
                 <div className="card p-6">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">
                     Generated Pipeline Files
                   </h3>
 
                   <div className="space-y-3">
-                    {Object.entries(result.pipeline_files).map(([path, content]) => (
+                    {result.pipeline_files && typeof result.pipeline_files === 'object' && Object.entries(result.pipeline_files).map(([path, content]) => (
                       <div key={path} className="border rounded-lg">
                         <div className="p-3 bg-gray-50 flex items-center justify-between">
                           <div className="flex items-center">
@@ -453,6 +594,7 @@ export default function PipelineModule() {
                           </div>
                           <div className="flex items-center space-x-2">
                             <button
+                              type="button"
                               onClick={() => handleCopyFile(content)}
                               className="p-1 text-gray-500 hover:text-gray-700 transition-colors"
                               title="Copy to clipboard"
@@ -460,6 +602,7 @@ export default function PipelineModule() {
                               <DocumentDuplicateIcon className="w-4 h-4" />
                             </button>
                             <button
+                              type="button"
                               onClick={() => handleEditFile(path, content)}
                               className="p-1 text-gray-500 hover:text-gray-700 transition-colors"
                               title="Edit file"
@@ -470,37 +613,67 @@ export default function PipelineModule() {
                         </div>
 
                         {editingFile === path ? (
-                          <div className="p-4 border-t">
-                            <textarea
-                              value={editedContent}
-                              onChange={(e) => setEditedContent(e.target.value)}
-                              className="w-full h-64 font-mono text-xs border rounded p-2 focus:outline-none focus:ring-2 focus:ring-f-ops-500"
-                              placeholder="Edit your pipeline file..."
-                            />
-                            <div className="mt-3 flex items-center space-x-2">
-                              <button
-                                onClick={handleSaveFile}
-                                disabled={saveFileMutation.isPending}
-                                className="btn-primary text-sm py-1 px-3 disabled:opacity-50"
-                              >
-                                {saveFileMutation.isPending ? (
-                                  <div className="flex items-center">
-                                    <LoadingSpinner className="w-3 h-3 mr-1" />
-                                    Saving...
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center">
-                                    <CheckIcon className="w-3 h-3 mr-1" />
-                                    Save
-                                  </div>
+                          <div className="border-t">
+                            <div className="p-4">
+                              <div className="mb-3 flex items-center justify-between">
+                                <h4 className="font-medium text-gray-900">
+                                  Editing: {path}
+                                </h4>
+                                {hasUnsavedChanges && (
+                                  <span className="text-amber-600 text-sm flex items-center">
+                                    <ArrowPathIcon className="w-3 h-3 mr-1" />
+                                    Unsaved changes
+                                  </span>
                                 )}
-                              </button>
-                              <button
-                                onClick={() => setEditingFile(null)}
-                                className="btn-secondary text-sm py-1 px-3"
-                              >
-                                Cancel
-                              </button>
+                              </div>
+                              <CodeEditor
+                                value={editedContent}
+                                onChange={handleContentChange}
+                                language="yaml"
+                                height={400}
+                              />
+                              <div className="mt-3 flex items-center space-x-2">
+                                <button
+                                  type="button"
+                                  onClick={handleSaveFile}
+                                  disabled={saveFileMutation.isPending}
+                                  className="btn-primary text-sm py-1 px-3 disabled:opacity-50"
+                                >
+                                  {saveFileMutation.isPending ? (
+                                    <div className="flex items-center">
+                                      <LoadingSpinner className="w-3 h-3 mr-1" />
+                                      Saving...
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center">
+                                      <CheckIcon className="w-3 h-3 mr-1" />
+                                      Save Changes
+                                    </div>
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleCancelEdit}
+                                  className="btn-secondary text-sm py-1 px-3"
+                                >
+                                  Cancel
+                                </button>
+                                {hasUnsavedChanges && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (editingFile) {
+                                        const original = result?.pipeline_files?.[editingFile] || ''
+                                        setEditedContent(original)
+                                        setHasUnsavedChanges(false)
+                                      }
+                                    }}
+                                    className="text-gray-500 hover:text-gray-700 text-sm"
+                                  >
+                                    Reset to original
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         ) : (
@@ -512,7 +685,7 @@ export default function PipelineModule() {
                     ))}
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Security Scan Results */}
               {result.security_scan && (
@@ -559,6 +732,7 @@ export default function PipelineModule() {
               <div className="card p-6">
                 {!result.pr_url ? (
                   <button
+                    type="button"
                     onClick={handleCreatePr}
                     disabled={createPrMutation.isPending}
                     className="w-full btn-success disabled:opacity-50 disabled:cursor-not-allowed"
@@ -605,7 +779,8 @@ export default function PipelineModule() {
             </div>
           )}
         </div>
+        </div>
       </div>
-    </div>
+    </>
   )
 }
