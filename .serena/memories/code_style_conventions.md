@@ -2,77 +2,94 @@
 
 ## Python Code Style
 
-### General Style
-- **PEP 8** compliance expected (standard Python style guide)
-- **Type hints**: Used throughout codebase (`from typing import List, Optional`)
-- **Pydantic models**: For data validation and API schemas
-- **Logging**: Structured logging with `logging.getLogger(__name__)`
+### General Conventions
+- **Type Hints**: Full type annotations using modern Python typing
+  - Function parameters and return types always annotated
+  - Use `Optional[T]` for nullable types, `Dict[str, Any]` for flexible dicts
+  - Import types from `typing` module
+- **Naming**: snake_case for variables, functions, and modules
+- **Classes**: PascalCase for class names (e.g., `PipelineAgent`, `Settings`)
+- **Private Methods**: Use single underscore prefix (e.g., `_generate_github_actions`)
 
-### Import Organization
-```python
-# Standard library first
-import os
-import sys
-import logging
+### Docstrings
+- Use simple docstrings with basic descriptions
+- Example: `"""Detect stack and frameworks from repository using AI"""`
+- No complex docstring formats like Sphinx or Google style observed
 
-# Third-party imports
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional
+### Configuration
+- **Settings**: Use Pydantic BaseSettings for configuration
+- **Environment**: pydantic-settings with .env file support
+- **Type Safety**: All config fields properly typed with defaults
+- **Case Sensitivity**: `case_sensitive: True` in model config
 
-# Local imports last
-from app.core.agent_fixed import DevOpsAgent
-```
+### Error Handling
+- Use try/except blocks with specific logging
+- Fallback strategies when AI services fail
+- Log errors with context before returning fallback values
 
-### Naming Conventions
-- **Functions/Variables**: `snake_case` (e.g., `onboard_repository`, `get_agent`)
-- **Classes**: `PascalCase` (e.g., `OnboardRequest`, `DevOpsAgent`)
-- **Constants**: `UPPER_SNAKE_CASE` (e.g., `API_V1_STR`)
-- **Files/Modules**: `snake_case` (e.g., `main.py`, `agent_fixed.py`)
+### Logging
+- Use standard Python logging with descriptive messages
+- Include structured data in audit logs
+- Log agent decisions with reasoning and context
 
-### API Patterns
-- **Request Models**: Pydantic BaseModel classes for API inputs
-- **Response Format**: Consistent JSON structure with success/error fields
-- **Error Handling**: Try-catch blocks with proper logging and HTTP exceptions
-- **Endpoint Naming**: RESTful patterns (`/api/onboard/repo`, `/api/deploy/service`)
+### Code Organization
+- **Agents**: Separate classes for each agent type
+- **Dependencies**: Inject services (kb, citation_engine, audit_logger, ai_service) via constructor
+- **Methods**: Public methods for main operations, private methods with underscore prefix
 
-### Directory Structure Conventions
+## TypeScript Code Style
+
+### General Conventions
+- **Strict Mode**: TypeScript strict mode enabled
+- **Target**: ES2020 with CommonJS modules
+- **Imports**: ES6 import syntax
+- **Exports**: Named exports preferred
+- **Error Handling**: Try/catch with proper error typing
+
+### File Organization
+- **Entry Point**: Single index.ts file
+- **Commands**: Separate files in commands/ directory
+- **Services**: Separate files in services/ directory
+- **Utils**: Utility functions in utils/ directory
+
+### CLI Structure
+- **Framework**: Commander.js for command structure
+- **Commands**: Modular command files (onboard.ts, kb.ts)
+- **User Interaction**: Chalk for colors, Inquirer for prompts
+
+## Project Structure Conventions
+
+### Directory Layout
 ```
 backend/
-├── app/
-│   ├── api/routes/         # API route handlers
-│   ├── core/              # Core business logic
-│   ├── schemas/           # Pydantic models
-│   └── utils/             # Utility functions
+  app/
+    agents/          # AI agent implementations
+    api/routes/      # FastAPI route handlers
+    core/           # Core services (KB, audit, AI)
+    mcp_servers/    # MCP server implementations
+    schemas/        # Pydantic models
 cli/
-├── fops/
-│   ├── commands/          # CLI command modules
-│   └── utils/             # CLI utilities
+  src/
+    commands/       # CLI command implementations
+    services/       # API client and services
+    utils/          # Utility functions
+tests/              # Test files
+mcp_packs/          # MCP server pack manager
 ```
 
-### Configuration Management
-- **Environment Variables**: Using `pydantic-settings` and `.env` files
-- **Defaults**: Sensible defaults with environment overrides
-- **Validation**: Pydantic for config validation
+### Import Patterns
+- **Relative Imports**: Use relative imports within app modules
+- **Absolute Imports**: Set up proper Python path for cross-module imports
+- **Type Imports**: Import types explicitly when needed
 
-### Documentation
-- **Docstrings**: Used for API endpoints and important functions
-- **Type Hints**: Comprehensive type annotations
-- **Comments**: Inline comments for complex logic
+### Configuration Files
+- **Environment**: .env files for local configuration
+- **Docker**: docker-compose.yml for local development
+- **TypeScript**: tsconfig.json with strict settings
+- **Python**: No pyproject.toml, using requirements.txt
 
-### Error Handling Patterns
-```python
-try:
-    # Business logic
-    result = some_operation()
-    return result
-except Exception as e:
-    logger.error(f"Operation failed: {e}")
-    raise HTTPException(status_code=500, detail=str(e))
-```
-
-## CLI Conventions
-- **Typer framework**: For command-line interface
-- **Rich library**: For formatted terminal output
-- **Global options**: Dry-run, verbose, config file support
-- **Sub-commands**: Organized by domain (onboard, deploy, kb, incident)
+## Security Conventions
+- **Proposal-Only**: Never execute commands directly, only generate PRs
+- **Token Scoping**: Minimal required permissions per MCP server
+- **Allow Lists**: Configured allowed repos and namespaces
+- **Audit Trail**: Immutable JSONL logs for all operations

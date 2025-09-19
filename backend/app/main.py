@@ -27,6 +27,7 @@ async def root():
         "endpoints": {
             "health": "/health",
             "pipeline": "/api/pipeline",
+            "infrastructure": "/api/infrastructure",
             "kb": "/api/kb"
         }
     }
@@ -44,9 +45,10 @@ async def health_check():
     }
 
 # Include API routes
-from app.api.routes import pipeline, kb
+from app.api.routes import pipeline, infrastructure, kb
 
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["pipeline-agent"])
+app.include_router(infrastructure.router, prefix="/api/infrastructure", tags=["infrastructure-agent"])
 app.include_router(kb.router, prefix="/api/kb", tags=["knowledge-base"])
 
 if __name__ == "__main__":
