@@ -1,15 +1,9 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import fs from 'fs-extra';
 import path from 'path';
-import yaml from 'yaml';
 import ora from 'ora';
 import inquirer from 'inquirer';
-import { ProjectScanner } from '../utils/projectScanner';
-import { WorkflowGenerator } from '../utils/workflowGenerator';
-import { FileOperations } from '../utils/fileOperations';
 import { FopsApiClient } from '../services/apiClient';
-import { GitUtils } from '../utils/gitUtils';
 
 export const onboardCommand = new Command('onboard')
   .description('Repository onboarding - guides you through auto/manual mode selection')
@@ -161,6 +155,29 @@ async function runManualMode(options: any) {
     },
     {
       type: 'list',
+      name: 'cloudProvider',
+      message: 'Choose cloud provider:',
+      choices: [
+        {
+          name: '☁️  AWS - Amazon Web Services',
+          value: 'aws',
+          short: 'AWS'
+        },
+        {
+          name: '🌐 Azure - Microsoft Azure',
+          value: 'azure',
+          short: 'Azure'
+        },
+        {
+          name: '🔴 GCP - Google Cloud Platform',
+          value: 'gcp',
+          short: 'GCP'
+        }
+      ],
+      default: 'aws'
+    },
+    {
+      type: 'list',
       name: 'target',
       message: 'Choose deployment target:',
       choices: [
@@ -224,6 +241,7 @@ async function runManualMode(options: any) {
   console.log('');
   console.log(chalk.cyan('🏗️  Project Settings'));
   console.log(`  Project Name: ${chalk.green(answers.projectName)}`);
+  console.log(`  Cloud Provider: ${chalk.blue(answers.cloudProvider.toUpperCase())}`);
   console.log(`  Deployment Target: ${chalk.yellow(answers.target)}`);
   console.log(`  Environments: ${chalk.cyan(answers.environments.join(' → '))}`);
   console.log(`  Testing: ${answers.includeTests ? '✅ Enabled' : '❌ Disabled'}`);
@@ -254,6 +272,7 @@ async function runManualMode(options: any) {
   try {
     const intelligentRequest = {
       local_path: process.cwd(),
+      cloud_provider: answers.cloudProvider,
       target: answers.target,
       environments: answers.environments,
       use_analysis: false  // Manual mode doesn't use AI analysis
@@ -263,6 +282,7 @@ async function runManualMode(options: any) {
       pipelineSpinner.succeed('✅ Pipeline generation simulated (dry-run mode)');
       console.log(chalk.blue('\n🔄 [DRY-RUN] Manual mode pipeline preview:'));
       console.log(`  📄 Directory: ${process.cwd()}`);
+      console.log(`  ☁️  Cloud Provider: ${answers.cloudProvider.toUpperCase()}`);
       console.log(`  🎯 Target: ${answers.target}`);
       console.log(`  🌍 Environments: ${answers.environments.join(', ')}`);
       console.log(`  🧪 Testing: ${answers.includeTests ? 'Enabled' : 'Disabled'}`);
@@ -290,6 +310,7 @@ async function runManualMode(options: any) {
       }
 
       console.log(chalk.cyan('\n🔍 Pipeline Configuration Applied:'));
+      console.log(`  Cloud Provider: ${chalk.blue(answers.cloudProvider.toUpperCase())}`);
       console.log(`  Deployment Target: ${chalk.green(answers.target)}`);
       console.log(`  Environments: ${chalk.green(answers.environments.join(', '))}`);
       console.log(`  Testing: ${answers.includeTests ? '✅ Included' : '❌ Skipped'}`);
